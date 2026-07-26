@@ -1,0 +1,129 @@
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+iram0_0_seg      0x0000000040080000 0x0000000000020000 xr
+dram0_0_seg      0x000000003ffb0000 0x0000000000028000 rw
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+
+.text           0x0000000040080000      0xa10
+ *(.literal.boot)
+ .literal.boot  0x0000000040080000        0x0 boot.o
+ *(.text.boot)
+ .text.boot     0x0000000040080000       0x27 boot.o
+                                         0x2e (size before relaxing)
+                0x000000004008000c                _start
+ *(.literal .text .literal.* .text.*)
+ *fill*         0x0000000040080027        0x1 
+ .text          0x0000000040080028      0x9e5 kernel.o
+                                        0xac1 (size before relaxing)
+                0x0000000040080028                custom_strlen
+                0x0000000040080048                uart_putc
+                0x000000004008006c                uart_getchar
+                0x000000004008008c                uart_print
+                0x00000000400800cc                delay_us
+                0x0000000040080108                i2c_init
+                0x0000000040080148                i2c_start
+                0x0000000040080188                i2c_stop
+                0x00000000400801d0                i2c_write_byte
+                0x00000000400802d8                ssd1306_send_command
+                0x0000000040080330                ssd1306_send_data
+                0x0000000040080388                ssd1306_set_cursor
+                0x00000000400803a8                ssd1306_clear
+                0x0000000040080420                ssd1306_init
+                0x0000000040080470                ssd1306_print_char
+                0x0000000040080488                ssd1306_print_string
+                0x00000000400804e4                init_ui_menu
+                0x0000000040080538                update_ui_cursor
+                0x0000000040080554                heap_init
+                0x0000000040080570                custom_malloc
+                0x00000000400805d0                custom_free
+                0x0000000040080608                run_sys_monitor
+                0x0000000040080674                run_placeholder_app
+                0x00000000400806d0                run_dynamic_text_editor
+                0x00000000400808d8                kernel_main
+ *fill*         0x0000000040080a0d        0x3 
+ .literal       0x0000000040080a10        0x0 kernel.o
+ .text          0x0000000040080a10        0x0 boot.o
+
+.rodata         0x000000003ffb0000      0x41c
+ *(.rodata)
+ .rodata        0x000000003ffb0000      0x308 kernel.o
+                0x000000003ffb0010                font8x8
+ *(.rodata.*)
+ .rodata.str1.4
+                0x000000003ffb0308      0x114 kernel.o
+
+.data           0x000000003ffb041c        0x0
+ *(.data)
+ .data          0x000000003ffb041c        0x0 kernel.o
+ .data          0x000000003ffb041c        0x0 boot.o
+ *(.data.*)
+
+.bss            0x000000003ffb041c     0x8008
+                0x000000003ffb041c                . = ALIGN (0x4)
+                0x000000003ffb041c                _bss_start = .
+ *(.bss*)
+ .bss           0x000000003ffb041c     0x8008 kernel.o
+                0x000000003ffb041c                dynamic_char_ptr
+ .bss           0x000000003ffb8424        0x0 boot.o
+ *(COMMON)
+                0x000000003ffb8424                . = ALIGN (0x4)
+                0x000000003ffb8424                _bss_end = .
+LOAD kernel.o
+LOAD boot.o
+OUTPUT(os.elf elf32-xtensa-le)
+
+.debug_frame    0x0000000000000000      0x298
+ .debug_frame   0x0000000000000000      0x298 kernel.o
+
+.debug_info     0x0000000000000000     0x22da
+ .debug_info    0x0000000000000000     0x22b4 kernel.o
+ .debug_info    0x00000000000022b4       0x26 boot.o
+
+.debug_abbrev   0x0000000000000000      0x500
+ .debug_abbrev  0x0000000000000000      0x4ec kernel.o
+ .debug_abbrev  0x00000000000004ec       0x14 boot.o
+
+.debug_loc      0x0000000000000000     0x11e3
+ .debug_loc     0x0000000000000000     0x11e3 kernel.o
+
+.debug_aranges  0x0000000000000000       0x40
+ .debug_aranges
+                0x0000000000000000       0x20 kernel.o
+ .debug_aranges
+                0x0000000000000020       0x20 boot.o
+
+.debug_ranges   0x0000000000000000      0x1b0
+ .debug_ranges  0x0000000000000000      0x1b0 kernel.o
+
+.debug_line     0x0000000000000000     0x27a1
+ .debug_line    0x0000000000000000     0x2734 kernel.o
+ .debug_line    0x0000000000002734       0x6d boot.o
+
+.debug_str      0x0000000000000000      0x395
+ .debug_str     0x0000000000000000      0x380 kernel.o
+                                        0x3a1 (size before relaxing)
+ .debug_str     0x0000000000000380       0x15 boot.o
+                                         0x26 (size before relaxing)
+
+.comment        0x0000000000000000       0x2c
+ .comment       0x0000000000000000       0x2c kernel.o
+                                         0x2d (size before relaxing)
+
+.xtensa.info    0x0000000000000000       0x38
+ .xtensa.info   0x0000000000000000       0x38 kernel.o
+ .xtensa.info   0x0000000000000038        0x0 boot.o
+
+.xt.lit         0x0000000000000000       0x60
+ .xt.lit        0x0000000000000000       0x58 kernel.o
+                                         0x98 (size before relaxing)
+ .xt.lit        0x0000000000000058        0x8 boot.o
+
+.xt.prop        0x0000000000000000      0x7b0
+ .xt.prop       0x0000000000000000      0x768 kernel.o
+                                        0x798 (size before relaxing)
+ .xt.prop       0x0000000000000768       0x48 boot.o

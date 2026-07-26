@@ -29,6 +29,19 @@ void uart_putc(char c) {
     *UART0_FIFO_REG = (unsigned int)c;
 }
 
+/* Wait for and read a single character from UART0 */
+char uart_getchar() {
+    /* * UART0_STATUS_REG bits [7:0] track RXFIFO_CNT (bytes received).
+     * We loop until at least one byte is waiting for us.
+     */
+    while ((*UART0_STATUS_REG & 0xFF) == 0) {
+        // Wait for user input (Mock Thumbstick)
+    }
+
+    /* Pop the byte directly out of the hardware receive queue */
+    return (char)(*UART0_FIFO_REG);
+}
+
 /* Transmit a string to the serial console */
 void uart_print(const char *str) {
     unsigned int len = custom_strlen(str);
@@ -242,7 +255,7 @@ const unsigned char font8x8[95][8] = {
     {0x07,0x08,0x70,0x08,0x07,0x00,0x00,0x00}, // 89 Y
     {0x61,0x51,0x49,0x45,0x43,0x00,0x00,0x00}, // 90 Z
     {0x00,0x7F,0x41,0x41,0x00,0x00,0x00,0x00}, // 91 [
-    {0x02,0x04,0x08,0x10,0x20,0x00,0x00,0x00}, // 92 \
+    {0x02,0x04,0x08,0x10,0x20,0x00,0x00,0x00}, // 92 
     {0x00,0x41,0x41,0x7F,0x00,0x00,0x00,0x00}, // 93 ]
     {0x04,0x02,0x01,0x02,0x04,0x00,0x00,0x00}, // 94 ^
     {0x40,0x40,0x40,0x40,0x40,0x00,0x00,0x00}, // 95 _
@@ -308,31 +321,335 @@ void ssd1306_print_string(const char *str) {
     }
 }
 
+// Draw the static text of the menu ONCE on boot
+void init_ui_menu(const char *menu_items[], int num_items, int starting_item) {
+    ssd1306_clear(); 
+    
+    // Draw Title Banner
+    ssd1306_set_cursor(0, 16);
+    ssd1306_print_string("-- OS MENU --");
+
+    // Draw the static menu text
+    for (int i = 0; i < num_items; i++) {
+        ssd1306_set_cursor((i * 2) + 2, 0); 
+        
+        // Draw the initial cursor position
+        if (i == starting_item) {
+            ssd1306_print_string("> "); 
+        } else {
+            ssd1306_print_string("  "); 
+        }
+        
+        ssd1306_print_string(menu_items[i]);
+    }
+}
+
+// Only redraw the specific cursor locations to save I2C bandwidth
+void update_ui_cursor(int old_item, int new_item) {
+    if (old_item == new_item) return; // Do nothing if it didn't change
+
+    // 1. Erase the old cursor by printing two blank spaces over it
+    ssd1306_set_cursor((old_item * 2) + 2, 0);
+    ssd1306_print_string("  ");
+
+    // 2. Draw the new cursor
+    ssd1306_set_cursor((new_item * 2) + 2, 0);
+    ssd1306_print_string("> ");
+}
+
+// Define the major states of the Operating System
+typedef enum {
+    STATE_MENU,
+    STATE_APP_TETRIS,
+    STATE_APP_MONITOR,
+    STATE_APP_SETTINGS
+} os_state_t;
+
+// Define the metadata header for our memory blocks
+typedef struct block_meta {
+    unsigned int size;           // How many bytes is this block?
+    int free;                    // 1 if free, 0 if in use
+    struct block_meta *next;     // Pointer to the next block in the chain
+} block_meta_t;
+
+// The start of our linked list of memory
+// The actual memory pool we will use for the heap (Let's start with a 32 KB pool)
+#define HEAP_SIZE 32768
+static unsigned char custom_heap[HEAP_SIZE];
+static block_meta_t *heap_head = (void*)0; 
+
+// Initialize the heap on first use
+void heap_init() {
+    // If the heap hasn't been set up yet, format it as one massive free block
+    if (heap_head == (void*)0) {
+        heap_head = (block_meta_t *)custom_heap;
+        heap_head->size = HEAP_SIZE - sizeof(block_meta_t);
+        heap_head->free = 1;
+        heap_head->next = (void*)0;
+    }
+}
+
+// Our custom bare-metal memory allocator
+void* custom_malloc(unsigned int size) {
+    if (size == 0) return (void*)0;
+    
+    // Ensure the heap is initialized before we start
+    if (heap_head == (void*)0) {
+        heap_init();
+    }
+    
+    block_meta_t *current = heap_head;
+    
+    // Traverse the linked list to find a free block that is big enough
+    while (current != (void*)0) {
+        if (current->free && current->size >= size) {
+            
+            // The Split: Can we slice this block into two? 
+            // (Only if there is enough leftover space for a new header + at least 1 byte of memory)
+            if (current->size > size + sizeof(block_meta_t)) {
+                
+                // Do pointer math to place a new header right after the chunk we are handing out
+                block_meta_t *new_block = (block_meta_t *)((unsigned char*)current + sizeof(block_meta_t) + size);
+                new_block->size = current->size - size - sizeof(block_meta_t);
+                new_block->free = 1;
+                new_block->next = current->next;
+                
+                // Shrink the current block and link it to the newly created free block
+                current->size = size;
+                current->next = new_block;
+            }
+            
+            current->free = 0; // Mark as officially IN USE
+            
+            // Return the memory address directly AFTER the metadata header
+            return (void*)(current + 1); 
+        }
+        current = current->next;
+    }
+    
+    // If we reach here, we are completely Out Of Memory (OOM)!
+    return (void*)0; 
+}
+
+
+
+// Free a dynamically allocated block of memory
+void custom_free(void *ptr) {
+    // If a null pointer is passed, do nothing
+    if (ptr == (void*)0) {
+        return; 
+    }
+
+    // Pointer math in reverse! 
+    // Step backward by exactly the size of one block_meta_t struct 
+    // to find our hidden metadata header.
+    block_meta_t *block_ptr = (block_meta_t *)ptr - 1;
+
+    // Mark the block as free so custom_malloc can claim it again
+    block_ptr->free = 1;
+
+    // --- The Coalesce (De-fragmentation) ---
+    // If the next adjacent block in memory is ALSO free, merge them together 
+    // into one massive free block. This prevents "Swiss-cheese" memory fragmentation.
+    if (block_ptr->next != (void*)0 && block_ptr->next->free == 1) {
+        block_ptr->size += sizeof(block_meta_t) + block_ptr->next->size;
+        block_ptr->next = block_ptr->next->next;
+    }
+}
+
+
+
+// A basic System Monitor view
+void run_sys_monitor() {
+    ssd1306_clear();
+    ssd1306_set_cursor(0, 0);
+    ssd1306_print_string("-- SYS MONITOR --");
+    
+    ssd1306_set_cursor(2, 0);
+    ssd1306_print_string("CPU: OK (Bare-Metal)");
+    
+    ssd1306_set_cursor(4, 0);
+    ssd1306_print_string("RAM: 520KB Total");
+    
+    // Instructions to exit
+    ssd1306_set_cursor(7, 0);
+    ssd1306_print_string("< 'a' to exit");
+}
+
+// A generic placeholder for unfinished apps
+void run_placeholder_app(const char* title) {
+    ssd1306_clear();
+    ssd1306_set_cursor(0, 0);
+    ssd1306_print_string(title);
+    
+    ssd1306_set_cursor(4, 16);
+    ssd1306_print_string("Coming Soon...");
+    
+    ssd1306_set_cursor(7, 0);
+    ssd1306_print_string("< 'a' to exit");
+}
+
+// Run a live dynamic typing buffer using our custom heap
+void run_dynamic_text_editor() {
+    unsigned int buffer_capacity = 16; // Start with 16 bytes of heap memory
+    unsigned int current_length = 0;
+    
+    // Dynamically allocate our initial text buffer from the heap!
+    char *text_buffer = (char *)custom_malloc(buffer_capacity);
+    if (text_buffer == (void*)0) {
+        return; // Out of memory safeguard
+    }
+    
+    text_buffer[0] = '\0'; // Null-terminate empty string
+
+    // Clear screen and show UI instructions
+    ssd1306_clear();
+    ssd1306_set_cursor(0, 0);
+    ssd1306_print_string("-- DYNAMIC EDITOR --");
+    ssd1306_set_cursor(6, 0);
+    ssd1306_print_string("Type on serial terminal");
+    ssd1306_set_cursor(7, 0);
+    ssd1306_print_string("Press ESC to exit");
+
+    while (1) {
+        char c = uart_getchar(); // Wait for keyboard input over serial
+
+        // Check for ESC key (ASCII 27) to exit the editor
+        if (c == 27) {
+            custom_free(text_buffer); // Clean up our heap memory before exiting!
+            break;
+        }
+
+        // Handle Backspace (ASCII 8 or 127)
+        else if (c == 8 || c == 127) {
+            if (current_length > 0) {
+                current_length--;
+                text_buffer[current_length] = '\0'; // Remove character
+                
+                // Echo backspace effect over serial terminal
+                uart_putc('\b');
+                uart_putc(' ');
+                uart_putc('\b');
+            }
+        } 
+        
+        // Handle Normal Printable Characters
+        else if (c >= 32 && c <= 126) {
+            // Check if we need to expand our buffer capacity (Dynamic Reallocation simulation)
+            if (current_length + 1 >= buffer_capacity) {
+                buffer_capacity += 16; // Grow capacity
+                char *new_buffer = (char *)custom_malloc(buffer_capacity);
+                
+                if (new_buffer != (void*)0) {
+                    // Copy old data to new larger buffer
+                    for (unsigned int i = 0; i < current_length; i++) {
+                        new_buffer[i] = text_buffer[i];
+                    }
+                    new_buffer[current_length] = '\0';
+                    
+                    // Free the old smaller memory block back to the heap!
+                    custom_free(text_buffer);
+                    text_buffer = new_buffer;
+                }
+            }
+
+            // Append the character
+            text_buffer[current_length] = c;
+            current_length++;
+            text_buffer[current_length] = '\0';
+
+            // Echo character back to the serial terminal
+            uart_putc(c);
+        }
+
+        // Optional: Render the live dynamic string onto the OLED display on Page 3
+        ssd1306_set_cursor(3, 0);
+        // Clear line space first by printing blanks, then print current buffer
+        ssd1306_print_string("                "); 
+        ssd1306_set_cursor(3, 0);
+        ssd1306_print_string(text_buffer);
+    }
+}
+
+// A global pointer to test our custom heap allocator
+// A global pointer to test our custom heap allocator
+char *dynamic_char_ptr = (void*)0;
+
 void kernel_main() {
-    // Disable Watchdogs
+    // 1. Disable Watchdogs
     *(volatile unsigned int *)0x3FF480A4 = 0x50D83AA1;
     *(volatile unsigned int *)0x3FF4808C = 0;
     *(volatile unsigned int *)0x3FF5F064 = 0x50D83AA1;
     *(volatile unsigned int *)0x3FF5F048 = 0;
 
-    // Initialize our bit-banged I2C bus
+    // 2. Initialize Hardware
     i2c_init();
     delay_us(100000); 
     ssd1306_init();
     
-    // 3. Wipe the VRAM clean (Turns the screen pitch black)
-    ssd1306_clear();
+    // 3. Define the UI State (Added "Text Editor" as the 4th option)
+    const char *apps[] = {
+        "Play Tetris",
+        "Sys Monitor",
+        "Settings",
+        "Text Editor"
+    };
+    int total_apps = 4;
+    int current_selection = 0;
+    int previous_selection = 0;
+    
+    // Start the OS in the Menu state
+    os_state_t current_state = STATE_MENU;
 
-    // 4. Move the cursor to Page 3 (roughly the middle vertically), Column 60
-    ssd1306_set_cursor(3, 60);
+    // 4. Initial Screen Draw 
+    init_ui_menu(apps, total_apps, current_selection);
 
-    // 5. Draw a small 8x8 pixel square block
-    for (int i = 0; i < 8; i++) {
-        // 0xFF means all 8 vertical pixels are turned ON (11111111 in binary)
-        ssd1306_send_data(0xFF); 
-    }
-
-    // Halt the CPU in an infinite loop
+    // 5. The Multi-State Input Loop
     while (1) {
+        char input = uart_getchar(); 
+
+        // --- IF WE ARE IN THE MAIN MENU ---
+        if (current_state == STATE_MENU) {
+            previous_selection = current_selection; 
+
+            if (input == 'w') { // UP
+                current_selection--;
+                if (current_selection < 0) current_selection = total_apps - 1; 
+                update_ui_cursor(previous_selection, current_selection);
+                
+            } else if (input == 's') { // DOWN
+                current_selection++;
+                if (current_selection >= total_apps) current_selection = 0; 
+                update_ui_cursor(previous_selection, current_selection);
+                
+            } else if (input == 'd') { // SELECT / ENTER APP
+                if (current_selection == 0) {
+                    current_state = STATE_APP_TETRIS;
+                    run_placeholder_app("TETRIS");
+                } else if (current_selection == 1) {
+                    current_state = STATE_APP_MONITOR;
+                    run_sys_monitor();
+                } else if (current_selection == 2) {
+                    current_state = STATE_APP_SETTINGS;
+                    run_placeholder_app("SETTINGS");
+                } else if (current_selection == 3) {
+                    // LAUNCH OUR DYNAMIC TEXT EDITOR!
+                    run_dynamic_text_editor();
+                    
+                    // Once ESC is pressed inside the editor, it returns here.
+                    // We redraw the main menu to restore the UI.
+                    current_state = STATE_MENU;
+                    init_ui_menu(apps, total_apps, current_selection);
+                }
+            }
+        } 
+        
+        // --- IF WE ARE INSIDE A PLACEHOLDER APP ---
+        else {
+            if (input == 'a') { // BACK / EXIT TO MENU
+                current_state = STATE_MENU;
+                init_ui_menu(apps, total_apps, current_selection); 
+            }
+        }
     }
 }

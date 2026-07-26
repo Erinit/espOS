@@ -35,12 +35,12 @@ SECTIONS
     } > dram0_0_seg
 
     /* .bss contains uninitialized variables */
-    .bss : ALIGN(4)
-    {
-        _bss_start = .;
-        *(.bss)
-        *(.bss.*)
+    .bss : {
+        . = ALIGN(4);
+        _bss_start = .;    /* Mark the exact start address */
+        *(.bss*)           /* All uninitialized variables go here */
         *(COMMON)
-        _bss_end = .;
+        . = ALIGN(4);
+        _bss_end = .;      /* Mark the exact end address */
     } > dram0_0_seg
 }
