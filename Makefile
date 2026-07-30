@@ -58,4 +58,4 @@ clean:
 	rm -f *.o *.elf *.bin *.map
 
 show:
-	screen /dev/ttyUSB0 115200
+	screen $(PORT) 115200
