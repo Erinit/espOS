@@ -79,6 +79,14 @@ void custom_itoa(unsigned int val, char* buf) {
     }
 }
 
+unsigned int custom_strlen(const char *str) {
+    unsigned int len = 0;
+    while (str[len] != '\0') {
+        len++;
+    }
+    return len;
+}
+
 // Custom memory copy (Required because GCC optimizes array copies into memcpy)
 void *memcpy(void *dest, const void *src, unsigned int n) {
     char *d = (char *)dest;
@@ -107,6 +115,15 @@ void *memset(void *s, int c, unsigned int n) {
 #define PIN_CS   5
 #define PIN_CLK  18
 #define PIN_MOSI 23
+
+// Classic Windows RGB565 Palette
+#define WIN_DESKTOP  0x0410 // Deep Teal
+#define WIN_FACE     0xD69A // Classic Light Gray
+#define WIN_TITLE    0x0935 // Dark Blue Title Bar
+#define WIN_SHADOW   0x8410 // Dark Gray (Outer Bevel)
+#define WIN_HILITE   0xFFFF // White (Inner Bevel)
+#define WIN_TEXT     0x0000 // Black
+#define WIN_TEXT_SEL 0xFFFF // White Text on Blue Background
 
 #define COLOR_BLACK   0x0000
 #define COLOR_WHITE   0xFFFF
@@ -371,54 +388,394 @@ void st7789_run_app_placeholder(const char* title, const char* desc) {
     st7789_draw_string(10, 300, "[ Press 'q' to Exit ]", COLOR_RED, COLOR_BLACK);
 }
 
-void st7789_run_text_editor() {
-    st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 16, COLOR_BLUE);
-    st7789_draw_string(2, 4, "TEXT EDITOR [Press 'q' to exit]", COLOR_WHITE, COLOR_BLUE);
-    unsigned int buffer_capacity = 32;
-    unsigned int current_length = 0;
-    char *text_buffer = (char *)custom_malloc(buffer_capacity);
-    if (text_buffer == (void*)0) return;
-    text_buffer[0] = '\0';
-    while (1) {
-        char c = uart_getchar();
-        if (c == 'q') {
-            custom_free(text_buffer);
-            return; 
-        }
-        else if (c == 8 || c == 127) {
-            if (current_length > 0) {
-                current_length--;
-                text_buffer[current_length] = '\0';
-                int col = current_length % 30;
-                int row = current_length / 30;
-                st7789_draw_char(col * 8, 20 + (row * 8), ' ', COLOR_WHITE, COLOR_BLACK);
-            }
-        } 
-        else if (c >= 32 && c <= 126) {
-            if (current_length + 1 >= buffer_capacity) {
-                buffer_capacity += 32; 
-                char *new_buffer = (char *)custom_malloc(buffer_capacity);
-                if (new_buffer != (void*)0) {
-                    for (unsigned int i = 0; i < current_length; i++) {
-                        new_buffer[i] = text_buffer[i];
-                    }
-                    new_buffer[current_length] = '\0';
-                    custom_free(text_buffer);
-                    text_buffer = new_buffer;
+typedef struct {
+    int id;
+    char* content;
+} ram_file_t;
+
+#define MAX_RAM_FILES 5
+ram_file_t ram_disk[MAX_RAM_FILES];
+int ram_file_count = 0;
+
+void save_to_ram_disk(char* buffer) {
+    if (ram_file_count < MAX_RAM_FILES) {
+        ram_disk[ram_file_count].id = ram_file_count + 1;
+        ram_disk[ram_file_count].content = buffer;
+        ram_file_count++;
+    } else {
+        custom_free(buffer);
+    }
+}
+
+void draw_win2k_window(int x, int y, int w, int h, const char* title) {
+    // 1. Fill the main window gray body
+    st7789_draw_rect(x, y, w, h, WIN_FACE);
+    
+    // 2. Draw 3D Raised Bevels
+    // Top and Left Highlights (White)
+    st7789_draw_rect(x, y, w, 1, WIN_HILITE);
+    st7789_draw_rect(x, y, 1, h, WIN_HILITE);
+    
+    // Bottom and Right Shadows (Black outer, Dark Gray inner)
+    st7789_draw_rect(x, y + h - 1, w, 1, 0x0000);
+    st7789_draw_rect(x + w - 1, y, 1, h, 0x0000);
+    st7789_draw_rect(x + 1, y + h - 2, w - 2, 1, WIN_SHADOW);
+    st7789_draw_rect(x + w - 2, y + 1, 1, h - 2, WIN_SHADOW);
+
+    // 3. Draw Title Bar (Blue)
+    st7789_draw_rect(x + 3, y + 3, w - 6, 18, WIN_TITLE);
+    
+    // 4. Draw Title Text (White text, Blue background)
+    st7789_draw_string(x + 6, y + 8, title, WIN_HILITE, WIN_TITLE);
+}
+
+void run_ram_file_browser() {
+    int cursor = 0;
+    int action_cursor = 0;
+    
+    // 0 = List, 1 = Action Menu, 2 = Read, 3 = Edit
+    int browser_state = 0; 
+    
+    int previous_cursor = -1;
+    int previous_action = -1;
+
+    st7789_fill_screen(0x0000);
+
+    while(1) {
+        
+        // ==========================================
+        // STATE 0: THE FILE LIST
+        // ==========================================
+        if (browser_state == 0) {
+            if (previous_cursor != cursor) {
+                st7789_draw_string(0, 0, "-- RAM DISK FILES --", 0x07E0, 0x0000);
+                
+                if (ram_file_count == 0) {
+                    st7789_draw_string(0, 24, "DISK EMPTY", 0xF800, 0x0000);
                 } else {
-                    buffer_capacity -= 32;
-                    continue;
+                    for (int i = 0; i < ram_file_count; i++) {
+                        int y_pos = 24 + (i * 16); 
+                        unsigned int color = (i == cursor) ? 0xFFE0 : 0xFFFF; // Yellow / White
+                        
+                        if (i == cursor) {
+                            st7789_draw_string(0, y_pos, "> FILE  ", color, 0x0000);
+                            st7789_draw_char(64, y_pos, '1' + i, color, 0x0000);
+                        } else {
+                            st7789_draw_string(0, y_pos, "  FILE  ", color, 0x0000);
+                            st7789_draw_char(64, y_pos, '1' + i, color, 0x0000);
+                        }
+                    }
+                }
+                previous_cursor = cursor;
+            }
+            
+            char in = uart_getchar();
+            
+            if (in == 'w' && cursor > 0) cursor--;
+            if (in == 's' && cursor < ram_file_count - 1) cursor++;
+            if (in == 'e' && ram_file_count > 0) {
+                browser_state = 1; // Jump to Action Menu
+                previous_action = -1;
+                action_cursor = 0;
+                st7789_fill_screen(0x0000);
+            }
+            if (in == 'q') break; // Exit Explorer entirely
+        } 
+        
+        // ==========================================
+        // STATE 1: THE ACTION MENU
+        // ==========================================
+        else if (browser_state == 1) {
+            if (previous_action != action_cursor) {
+                st7789_draw_string(0, 0, "-- FILE OPTIONS --", 0x07E0, 0x0000);
+                const char* actions[] = {"READ", "EDIT", "DELETE"};
+                
+                for (int i = 0; i < 3; i++) {
+                    int y_pos = 24 + (i * 16);
+                    unsigned int color = (i == action_cursor) ? 0xFFE0 : 0xFFFF;
+                    
+                    if (i == action_cursor) {
+                        st7789_draw_string(0, y_pos, "> ", color, 0x0000);
+                    } else {
+                        st7789_draw_string(0, y_pos, "  ", color, 0x0000);
+                    }
+                    st7789_draw_string(16, y_pos, actions[i], color, 0x0000);
+                }
+                previous_action = action_cursor;
+            }
+            
+            char in = uart_getchar();
+            
+            if (in == 'w' && action_cursor > 0) action_cursor--;
+            if (in == 's' && action_cursor < 2) action_cursor++;
+            if (in == 'q') {
+                browser_state = 0; // Back to File List
+                previous_cursor = -1;
+                st7789_fill_screen(0x0000);
+            }
+            if (in == 'e') {
+                if (action_cursor == 0) {
+                    browser_state = 2; // Enter Read Mode
+                    st7789_fill_screen(0x0000);
+                } 
+                else if (action_cursor == 1) {
+                    browser_state = 3; // Enter Edit Mode
+                    st7789_fill_screen(0x0000);
+                } 
+                else if (action_cursor == 2) {
+                    // EXECUTING DELETE
+                    custom_free(ram_disk[cursor].content); // Free the memory!
+                    
+                    // Shift the remaining files up to fill the gap
+                    for (int i = cursor; i < ram_file_count - 1; i++) {
+                        ram_disk[i] = ram_disk[i + 1];
+                        ram_disk[i].id = i + 1;
+                    }
+                    ram_file_count--;
+                    
+                    // Keep cursor in bounds
+                    if (cursor >= ram_file_count && cursor > 0) cursor--;
+                    
+                    // Return to File List
+                    browser_state = 0;
+                    previous_cursor = -1;
+                    st7789_fill_screen(0x0000);
                 }
             }
-            text_buffer[current_length] = c;
-            int col = current_length % 30;
-            int row = current_length / 30;
-            if (row < 37) {
-                st7789_draw_char(col * 8, 20 + (row * 8), c, COLOR_GREEN, COLOR_BLACK);
+        }
+        
+        // ==========================================
+        // STATE 2: READ MODE
+        // ==========================================
+        else if (browser_state == 2) {
+            st7789_draw_string(0, 0, "-- VIEWING FILE --", 0x07E0, 0x0000);
+            int len = custom_strlen(ram_disk[cursor].content);
+            int start_index = 0;
+            if (len > 1110) start_index = len - 1110;
+            
+            int r = 0;
+            int c = 0;
+            for (int i = start_index; i < len; i++) {
+                st7789_draw_char(c * 8, (r * 8) + 24, ram_disk[cursor].content[i], 0xFFFF, 0x0000);
+                c++;
+                if (c >= 30) {
+                    c = 0;
+                    r++;
+                }
             }
-            current_length++;
-            text_buffer[current_length] = '\0';
+            
+            char in = uart_getchar();
+            if (in == 'q') {
+                browser_state = 1; // Go back to Action Menu
+                previous_action = -1;
+                st7789_fill_screen(0x0000);
+            }
+        }
+        
+        // ==========================================
+        // STATE 3: EDIT MODE (Append)
+        // ==========================================
+        else if (browser_state == 3) {
+            st7789_draw_string(0, 0, "-- EDITING FILE --", 0x07E0, 0x0000);
+            
+            char* text_buffer = ram_disk[cursor].content;
+            unsigned int current_length = custom_strlen(text_buffer);
+            unsigned int buffer_capacity = current_length + 32;
+            
+            char* new_buffer = (char*)custom_malloc(buffer_capacity);
+            for (unsigned int i = 0; i <= current_length; i++) {
+                new_buffer[i] = text_buffer[i];
+            }
+            custom_free(text_buffer);
+            text_buffer = new_buffer;
+            ram_disk[cursor].content = text_buffer;
+
+            int r = 0;
+            int c = 0;
+            for (unsigned int i = 0; i < current_length; i++) {
+                st7789_draw_char(c * 8, (r * 8) + 24, text_buffer[i], 0xFFFF, 0x0000);
+                c++;
+                if (c >= 30) { c = 0; r++; }
+            }
+
+            unsigned int last_blink = get_ccount();
+            int cursor_state = 0;
+
+            while (1) {
+                if (get_ccount() - last_blink > 20000000) {
+                    cursor_state = !cursor_state;
+                    last_blink = get_ccount();
+                    
+                    r = current_length / 30;
+                    c = current_length % 30;
+                    if (current_length >= 1110) { r = 36; c = 29; }
+                    
+                    char draw_char = cursor_state ? '_' : ' ';
+                    st7789_draw_char(c * 8, (r * 8) + 24, draw_char, 0xFFFF, 0x0000);
+                }
+
+                if ((*UART0_STATUS_REG & 0xFF) > 0) {
+                    char in = uart_getchar();
+                    
+                    r = current_length / 30;
+                    c = current_length % 30;
+                    if (current_length >= 1110) { r = 36; c = 29; }
+                    st7789_draw_char(c * 8, (r * 8) + 24, ' ', 0x0000, 0x0000);
+
+                    if (in == 'q') {
+                        browser_state = 1;
+                        previous_action = -1;
+                        st7789_fill_screen(0x0000);
+                        break;
+                    }
+
+                    if (in == 127 || in == 8) {
+                        if (current_length > 0) {
+                            current_length--;
+                            text_buffer[current_length] = '\0';
+                            
+                            r = current_length / 30;
+                            c = current_length % 30;
+                            st7789_draw_char(c * 8, (r * 8) + 24, ' ', 0x0000, 0x0000); 
+                        }
+                    } 
+                    else if (in >= 32 && in <= 126) {
+                        if (current_length + 1 >= buffer_capacity) {
+                            unsigned int new_cap = buffer_capacity * 2;
+                            char* grow_buffer = (char*)custom_malloc(new_cap);
+                            for (unsigned int i = 0; i <= current_length; i++) {
+                                grow_buffer[i] = text_buffer[i];
+                            }
+                            custom_free(text_buffer);
+                            text_buffer = grow_buffer;
+                            ram_disk[cursor].content = text_buffer;
+                            buffer_capacity = new_cap;
+                        }
+
+                        text_buffer[current_length] = in;
+                        
+                        r = current_length / 30;
+                        c = current_length % 30;
+                        if (current_length < 1110) { 
+                            st7789_draw_char(c * 8, (r * 8) + 24, in, 0xFFFF, 0x0000);
+                        }
+                        
+                        current_length++;
+                        text_buffer[current_length] = '\0';
+                    }
+                }
+            }
+        }
+    }
+}
+
+void run_dynamic_text_editor() {
+    unsigned int buffer_capacity = 32;
+    unsigned int current_length = 0;
+    char* text_buffer = (char*)custom_malloc(buffer_capacity);
+    
+    if (text_buffer == (void*)0) return;
+    text_buffer[0] = '\0';
+
+    // 1. Draw the Desktop and the main Notepad Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "Notepad");
+    
+    // 2. Draw the sunken white text canvas
+    st7789_draw_rect(10, 28, 220, 280, WIN_SHADOW); // Dark outer bevel
+    st7789_draw_rect(11, 29, 218, 278, WIN_HILITE); // Pure white typing area
+
+    unsigned int last_blink = get_ccount();
+    int cursor_state = 0;
+
+    while (1) {
+        // Calculate grid position for 27 columns and 34 rows (918 chars)
+        unsigned int r = current_length / 27;
+        unsigned int c = current_length % 27;
+        if (current_length >= 918) { 
+            r = 33; 
+            c = 26; 
+        }
+        
+        // Pixel offsets to perfectly align text inside the white canvas
+        int x_pos = (c * 8) + 12;
+        int y_pos = (r * 8) + 30;
+
+        // Non-Blocking Blinking Cursor (Black text on White background)
+        if (get_ccount() - last_blink > 20000000) {
+            cursor_state = !cursor_state;
+            last_blink = get_ccount();
+            char draw_char = cursor_state ? '_' : ' ';
+            st7789_draw_char(x_pos, y_pos, draw_char, WIN_TEXT, WIN_HILITE);
+        }
+
+        if ((*UART0_STATUS_REG & 0xFF) > 0) {
+            char in = uart_getchar();
+
+            // Erase the cursor instantly before moving
+            st7789_draw_char(x_pos, y_pos, ' ', WIN_TEXT, WIN_HILITE);
+
+            if (in == 'q') {
+                save_to_ram_disk(text_buffer);
+                break;
+            }
+
+            if (in == 127 || in == 8) { // Backspace
+                if (current_length > 0) {
+                    current_length--;
+                    text_buffer[current_length] = '\0';
+                    
+                    r = current_length / 27;
+                    c = current_length % 27;
+                    x_pos = (c * 8) + 12;
+                    y_pos = (r * 8) + 30;
+                    st7789_draw_char(x_pos, y_pos, ' ', WIN_TEXT, WIN_HILITE); 
+                }
+            } 
+            else if (in >= 32 && in <= 126) {
+                
+                // Dynamic RAM Allocation
+                if (current_length + 1 >= buffer_capacity) {
+                    unsigned int new_capacity = buffer_capacity * 2;
+                    char* new_buffer = (char*)custom_malloc(new_capacity);
+                    if (new_buffer != (void*)0) {
+                        for (unsigned int i = 0; i < current_length; i++) {
+                            new_buffer[i] = text_buffer[i];
+                        }
+                        new_buffer[current_length] = '\0';
+                        custom_free(text_buffer);
+                        text_buffer = new_buffer;
+                        buffer_capacity = new_capacity;
+                    }
+                }
+
+                text_buffer[current_length] = in;
+                
+                if (current_length < 918) { 
+                    // Draw normal character (Black on White)
+                    st7789_draw_char(x_pos, y_pos, in, WIN_TEXT, WIN_HILITE);
+                } else {
+                    // Scrolling Redraw (Uses the hardware rect fill to instantly wipe the canvas)
+                    st7789_draw_rect(11, 29, 218, 278, WIN_HILITE);
+                    
+                    unsigned int start_index = current_length - 917;
+                    unsigned int temp_r = 0;
+                    unsigned int temp_c = 0;
+                    for (unsigned int i = start_index; i <= current_length; i++) {
+                        int tx = (temp_c * 8) + 12;
+                        int ty = (temp_r * 8) + 30;
+                        st7789_draw_char(tx, ty, text_buffer[i], WIN_TEXT, WIN_HILITE);
+                        temp_c++;
+                        if (temp_c >= 27) {
+                            temp_c = 0;
+                            temp_r++;
+                        }
+                    }
+                }
+                
+                current_length++;
+                text_buffer[current_length] = '\0';
+            }
         }
     }
 }
@@ -1017,39 +1374,43 @@ void st7789_run_games_menu() {
     }
 }
 
+
 const char *menu_items[] = {
     "System Monitor",
     "Text Editor",
     "Games",
     "File Explorer",
-    "About the Creator"
+    "About OS"
 };
+
 const int TOTAL_MENU_ITEMS = 5;
 
-void st7789_init_menu(int starting_item) {
-    st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 40, COLOR_GRAY);
-    st7789_draw_string(30, 16, "BARE-METAL OS V1.0", COLOR_YELLOW, COLOR_GRAY);
-    for (int i = 0; i < TOTAL_MENU_ITEMS; i++) {
-        int y_pos = 70 + (i * 30);
-        if (i == starting_item) {
-            st7789_draw_string(10, y_pos, ">", COLOR_YELLOW, COLOR_BLACK);
-            st7789_draw_string(30, y_pos, menu_items[i], COLOR_YELLOW, COLOR_BLACK);
-        } else {
-            st7789_draw_string(10, y_pos, " ", COLOR_BLACK, COLOR_BLACK); 
-            st7789_draw_string(30, y_pos, menu_items[i], COLOR_WHITE, COLOR_BLACK);
-        }
+// 1. Draws the heavy background (Call this ONCE on boot, or when exiting an app)
+void st7789_draw_desktop() {
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(10, 10, 220, 300, "Programs");
+}
+
+void st7789_draw_single_item(int index, int is_selected) {
+    int start_y = 40;
+    int start_x = 20;
+    int y_pos = start_y + (index * 20);
+    
+    if (is_selected) {
+        // Draw blue highlight
+        st7789_draw_rect(start_x, y_pos - 2, 180, 16, WIN_TITLE);
+        st7789_draw_string(start_x + 4, y_pos, menu_items[index], WIN_TEXT_SEL, WIN_TITLE);
+    } else {
+        // Draw gray unselected
+        st7789_draw_rect(start_x, y_pos - 2, 180, 16, WIN_FACE);
+        st7789_draw_string(start_x + 4, y_pos, menu_items[index], WIN_TEXT, WIN_FACE);
     }
 }
 
-void st7789_update_menu_cursor(int old_item, int new_item) {
-    if (old_item == new_item) return;
-    int old_y = 70 + (old_item * 30);
-    int new_y = 70 + (new_item * 30);
-    st7789_draw_string(10, old_y, " ", COLOR_BLACK, COLOR_BLACK);
-    st7789_draw_string(30, old_y, menu_items[old_item], COLOR_WHITE, COLOR_BLACK);
-    st7789_draw_string(10, new_y, ">", COLOR_YELLOW, COLOR_BLACK);
-    st7789_draw_string(30, new_y, menu_items[new_item], COLOR_YELLOW, COLOR_BLACK);
+void st7789_draw_full_menu(int current_selection) {
+    for (int i = 0; i < 5; i++) {
+        st7789_draw_single_item(i, (i == current_selection));
+    }
 }
 
 void kernel_main() {
@@ -1062,52 +1423,73 @@ void kernel_main() {
     st7789_init();
 
     int current_selection = 0;
-    int previous_selection = 0;
     os_state_t current_state = STATE_MENU;
 
-    st7789_init_menu(current_selection);
-
+    st7789_draw_desktop();
+    st7789_draw_full_menu(current_selection);
     while(1) {
         char input = uart_getchar(); 
         if (current_state == STATE_MENU) {
-            previous_selection = current_selection;
+            int previous_selection = current_selection;
+
             if (input == 'w') { 
                 current_selection--;
-                if (current_selection < 0) current_selection = TOTAL_MENU_ITEMS - 1; 
-                st7789_update_menu_cursor(previous_selection, current_selection);
-            } else if (input == 's') { 
+                if (current_selection < 0) current_selection = 4; 
+                
+                // ONLY update the two items that changed
+                st7789_draw_single_item(previous_selection, 0); // Deselect old
+                st7789_draw_single_item(current_selection, 1);  // Select new
+            } 
+            else if (input == 's') { 
                 current_selection++;
-                if (current_selection >= TOTAL_MENU_ITEMS) current_selection = 0; 
-                st7789_update_menu_cursor(previous_selection, current_selection);
+                if (current_selection > 4) current_selection = 0; 
+                
+                // ONLY update the two items that changed
+                st7789_draw_single_item(previous_selection, 0); // Deselect old
+                st7789_draw_single_item(current_selection, 1);  // Select new
             } else if (input == 'e') { 
                 if (current_selection == 0) {
                     current_state = STATE_APP_MONITOR;
                     st7789_run_sys_monitor();
                     current_state = STATE_MENU;
-                    st7789_init_menu(current_selection);
-                } else if (current_selection == 1) {
+                    st7789_draw_desktop();
+                    st7789_draw_full_menu(current_selection);
+                } 
+                else if (current_selection == 1) {
                     current_state = STATE_APP_EDITOR;
-                    st7789_run_text_editor();
+                    run_dynamic_text_editor();
                     current_state = STATE_MENU;
-                    st7789_init_menu(current_selection);
-                } else if (current_selection == 2) {
+                    st7789_draw_desktop();
+                    st7789_draw_full_menu(current_selection);
+                } 
+                else if (current_selection == 2) {
                     current_state = STATE_APP_GAMES;
                     st7789_run_games_menu();
                     current_state = STATE_MENU;
-                    st7789_init_menu(current_selection);
-                } else if (current_selection == 3) {
-                    current_state = STATE_APP_EXPLORER;
-                    st7789_run_app_placeholder("FILE EXPLORER", "Mounting MicroSD...");
-                } else if (current_selection == 4) {
+                    st7789_draw_desktop();
+                    st7789_draw_full_menu(current_selection);
+                } 
+                else if (current_selection == 3) {
+                    current_state = STATE_APP_EXPLORER; // 1. Set state
+                    run_ram_file_browser();             // 2. Run app
+                    current_state = STATE_MENU;         // 3. Restore state
+                    st7789_draw_desktop();              // 4. Redraw Background
+                    st7789_draw_full_menu(current_selection); // 5. Redraw Menu List
+                } 
+                else if (current_selection == 4) {
                     current_state = STATE_APP_ABOUT;
                     st7789_run_app_placeholder("ABOUT", "Bare-Metal OS");
+                    current_state = STATE_MENU;
+                    st7789_draw_desktop();
+                    st7789_draw_full_menu(current_selection);
                 }
             }
         } 
         else {
             if (input == 'q') { 
                 current_state = STATE_MENU;
-                st7789_init_menu(current_selection); 
+                st7789_draw_desktop();
+                st7789_draw_full_menu(current_selection);
             }
         }
     }
