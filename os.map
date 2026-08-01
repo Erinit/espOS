@@ -9,7 +9,7 @@ dram0_0_seg      0x000000003ffb0000 0x0000000000028000 rw
 Linker script and memory map
 
 
-.text           0x0000000040080000     0x1434
+.text           0x0000000040080000     0x25e8
  *(.literal.boot)
  .literal.boot  0x0000000040080000        0x0 boot.o
  *(.text.boot)
@@ -18,83 +18,97 @@ Linker script and memory map
                 0x000000004008000c                _start
  *(.literal .text .literal.* .text.*)
  *fill*         0x0000000040080027        0x1 
- .text          0x0000000040080028     0x140b kernel.o
-                                       0x1503 (size before relaxing)
+ .text          0x0000000040080028     0x25bf kernel.o
+                                       0x275f (size before relaxing)
                 0x00000000400800a4                update_uptime
                 0x00000000400800e0                delay_us
                 0x0000000040080110                uart_getchar
                 0x0000000040080140                uart_has_char
                 0x000000004008015c                custom_itoa
-                0x000000004008018c                spi_init
-                0x00000000400801b8                spi_send_byte
-                0x00000000400801f8                st7789_send_command
-                0x000000004008024c                st7789_send_data
-                0x00000000400802b0                st7789_init
-                0x0000000040080548                st7789_set_window
-                0x0000000040080968                st7789_fill_screen
-                0x0000000040080a0c                st7789_draw_rect
-                0x0000000040080ac0                st7789_draw_char
-                0x0000000040080ae4                st7789_draw_string
-                0x0000000040080bb8                heap_init
-                0x0000000040080bd4                custom_malloc
-                0x0000000040080c34                custom_free
-                0x0000000040080c60                get_free_heap
-                0x0000000040080c8c                st7789_run_app_placeholder
-                0x0000000040080cdc                st7789_run_text_editor
-                0x0000000040080f00                st7789_run_sys_monitor
-                0x0000000040081188                st7789_init_menu
-                0x000000004008121c                st7789_update_menu_cursor
-                0x0000000040081258                kernel_main
- *fill*         0x0000000040081433        0x1 
- .literal       0x0000000040081434        0x0 kernel.o
- .text          0x0000000040081434        0x0 boot.o
+                0x0000000040080178                memcpy
+                0x0000000040080194                memset
+                0x00000000400801c4                spi_init
+                0x00000000400801f0                spi_send_byte
+                0x0000000040080230                st7789_send_command
+                0x0000000040080284                st7789_send_data
+                0x00000000400802e8                st7789_init
+                0x000000004008057c                st7789_set_window
+                0x000000004008099c                st7789_fill_screen
+                0x0000000040080a40                st7789_draw_rect
+                0x0000000040080af4                st7789_draw_char
+                0x0000000040080b18                st7789_draw_string
+                0x0000000040080be0                st7789_draw_vline
+                0x0000000040080c04                heap_init
+                0x0000000040080c20                custom_malloc
+                0x0000000040080c80                custom_free
+                0x0000000040080cac                get_free_heap
+                0x0000000040080cd8                st7789_run_app_placeholder
+                0x0000000040080d28                st7789_run_text_editor
+                0x0000000040080f24                custom_rand
+                0x0000000040080f68                st7789_run_snake
+                0x0000000040081380                st7789_run_block_breaker
+                0x00000000400817b8                st7789_run_sys_monitor
+                0x0000000040081ae8                tetris_check_collision
+                0x0000000040081b58                tetris_draw_piece
+                0x0000000040081be0                tetris_draw_next_piece
+                0x0000000040081c4c                st7789_run_tetris
+                0x00000000400821a0                st7789_run_games_menu
+                0x000000004008232c                st7789_init_menu
+                0x00000000400823c0                st7789_update_menu_cursor
+                0x00000000400823f4                kernel_main
+ *fill*         0x00000000400825e7        0x1 
+ .literal       0x00000000400825e8        0x0 kernel.o
+ .text          0x00000000400825e8        0x0 boot.o
 
-.rodata         0x000000003ffb0000      0x4d2
+.rodata         0x000000003ffb0000      0x582
  *(.rodata)
- .rodata        0x000000003ffb0000      0x2fc kernel.o
-                0x000000003ffb0000                TOTAL_MENU_ITEMS
-                0x000000003ffb0004                font8x8
+ .rodata        0x000000003ffb0000      0x350 kernel.o
+                0x000000003ffb000c                TOTAL_MENU_ITEMS
+                0x000000003ffb0010                tetris_colors
+                0x000000003ffb0020                tetris_pieces
+                0x000000003ffb0058                font8x8
  *(.rodata.*)
  .rodata.str1.4
-                0x000000003ffb02fc      0x1d6 kernel.o
-                                        0x1de (size before relaxing)
+                0x000000003ffb0350      0x232 kernel.o
+                                        0x236 (size before relaxing)
 
-.data           0x000000003ffb04d4       0x14
+.data           0x000000003ffb0584       0x14
  *(.data)
- .data          0x000000003ffb04d4       0x14 kernel.o
-                0x000000003ffb04d4                menu_items
- .data          0x000000003ffb04e8        0x0 boot.o
+ .data          0x000000003ffb0584       0x14 kernel.o
+                0x000000003ffb0584                menu_items
+ .data          0x000000003ffb0598        0x0 boot.o
  *(.data.*)
 
-.bss            0x000000003ffb04e8     0x8010
-                0x000000003ffb04e8                . = ALIGN (0x4)
-                0x000000003ffb04e8                _bss_start = .
+.bss            0x000000003ffb0598     0x8014
+                0x000000003ffb0598                . = ALIGN (0x4)
+                0x000000003ffb0598                _bss_start = .
  *(.bss*)
- .bss           0x000000003ffb04e8     0x8010 kernel.o
-                0x000000003ffb04e8                last_ccount
-                0x000000003ffb04ec                cycle_accumulator
-                0x000000003ffb04f0                global_uptime_sec
- .bss           0x000000003ffb84f8        0x0 boot.o
+ .bss           0x000000003ffb0598     0x8014 kernel.o
+                0x000000003ffb0598                prng_state
+                0x000000003ffb059c                last_ccount
+                0x000000003ffb05a0                cycle_accumulator
+                0x000000003ffb05a4                global_uptime_sec
+ .bss           0x000000003ffb85ac        0x0 boot.o
  *(COMMON)
-                0x000000003ffb84f8                . = ALIGN (0x4)
-                0x000000003ffb84f8                _bss_end = .
+                0x000000003ffb85ac                . = ALIGN (0x4)
+                0x000000003ffb85ac                _bss_end = .
 LOAD kernel.o
 LOAD boot.o
 OUTPUT(os.elf elf32-xtensa-le)
 
-.debug_frame    0x0000000000000000      0x2b0
- .debug_frame   0x0000000000000000      0x2b0 kernel.o
+.debug_frame    0x0000000000000000      0x3b8
+ .debug_frame   0x0000000000000000      0x3b8 kernel.o
 
-.debug_info     0x0000000000000000     0x2ad6
- .debug_info    0x0000000000000000     0x2ab0 kernel.o
- .debug_info    0x0000000000002ab0       0x26 boot.o
+.debug_info     0x0000000000000000     0x4fa4
+ .debug_info    0x0000000000000000     0x4f7e kernel.o
+ .debug_info    0x0000000000004f7e       0x26 boot.o
 
-.debug_abbrev   0x0000000000000000      0x562
- .debug_abbrev  0x0000000000000000      0x54e kernel.o
- .debug_abbrev  0x000000000000054e       0x14 boot.o
+.debug_abbrev   0x0000000000000000      0x61f
+ .debug_abbrev  0x0000000000000000      0x60b kernel.o
+ .debug_abbrev  0x000000000000060b       0x14 boot.o
 
-.debug_loc      0x0000000000000000     0x2142
- .debug_loc     0x0000000000000000     0x2142 kernel.o
+.debug_loc      0x0000000000000000     0x3dc5
+ .debug_loc     0x0000000000000000     0x3dc5 kernel.o
 
 .debug_aranges  0x0000000000000000       0x40
  .debug_aranges
@@ -102,17 +116,17 @@ OUTPUT(os.elf elf32-xtensa-le)
  .debug_aranges
                 0x0000000000000020       0x20 boot.o
 
-.debug_ranges   0x0000000000000000      0x920
- .debug_ranges  0x0000000000000000      0x920 kernel.o
+.debug_ranges   0x0000000000000000     0x1068
+ .debug_ranges  0x0000000000000000     0x1068 kernel.o
 
-.debug_line     0x0000000000000000     0x40b7
- .debug_line    0x0000000000000000     0x404a kernel.o
- .debug_line    0x000000000000404a       0x6d boot.o
+.debug_line     0x0000000000000000     0x7161
+ .debug_line    0x0000000000000000     0x70f4 kernel.o
+ .debug_line    0x00000000000070f4       0x6d boot.o
 
-.debug_str      0x0000000000000000      0x4bd
- .debug_str     0x0000000000000000      0x4a8 kernel.o
-                                        0x4d8 (size before relaxing)
- .debug_str     0x00000000000004a8       0x15 boot.o
+.debug_str      0x0000000000000000      0x6d1
+ .debug_str     0x0000000000000000      0x6bc kernel.o
+                                        0x717 (size before relaxing)
+ .debug_str     0x00000000000006bc       0x15 boot.o
                                          0x26 (size before relaxing)
 
 .comment        0x0000000000000000       0x2c
@@ -123,12 +137,12 @@ OUTPUT(os.elf elf32-xtensa-le)
  .xtensa.info   0x0000000000000000       0x38 kernel.o
  .xtensa.info   0x0000000000000038        0x0 boot.o
 
-.xt.lit         0x0000000000000000       0x88
- .xt.lit        0x0000000000000000       0x80 kernel.o
-                                         0xb0 (size before relaxing)
- .xt.lit        0x0000000000000080        0x8 boot.o
+.xt.lit         0x0000000000000000       0xb8
+ .xt.lit        0x0000000000000000       0xb0 kernel.o
+                                         0xf0 (size before relaxing)
+ .xt.lit        0x00000000000000b0        0x8 boot.o
 
-.xt.prop        0x0000000000000000      0xd38
- .xt.prop       0x0000000000000000      0xcf0 kernel.o
-                                        0xd38 (size before relaxing)
- .xt.prop       0x0000000000000cf0       0x48 boot.o
+.xt.prop        0x0000000000000000     0x17a0
+ .xt.prop       0x0000000000000000     0x1758 kernel.o
+                                       0x17b8 (size before relaxing)
+ .xt.prop       0x0000000000001758       0x48 boot.o

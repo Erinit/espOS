@@ -79,6 +79,25 @@ void custom_itoa(unsigned int val, char* buf) {
     }
 }
 
+// Custom memory copy (Required because GCC optimizes array copies into memcpy)
+void *memcpy(void *dest, const void *src, unsigned int n) {
+    char *d = (char *)dest;
+    const char *s = (const char *)src;
+    for (unsigned int i = 0; i < n; i++) {
+        d[i] = s[i];
+    }
+    return dest;
+}
+
+// Custom memory set (Required because GCC optimizes array zeroing into memset)
+void *memset(void *s, int c, unsigned int n) {
+    unsigned char *p = (unsigned char *)s;
+    for (unsigned int i = 0; i < n; i++) {
+        p[i] = (unsigned char)c;
+    }
+    return s;
+}
+
 #define GPIO_ENABLE_W1TS_REG (*(volatile unsigned int *)0x3FF44024)
 #define GPIO_OUT_W1TS_REG    (*(volatile unsigned int *)0x3FF44008)
 #define GPIO_OUT_W1TC_REG    (*(volatile unsigned int *)0x3FF4400C)
@@ -98,6 +117,7 @@ void custom_itoa(unsigned int val, char* buf) {
 #define COLOR_CYAN    0x07FF
 #define COLOR_MAGENTA 0xF81F
 #define COLOR_GRAY    0x8410
+#define COLOR_ORANGE 0xFD20
 
 void spi_init() {
     GPIO_ENABLE_W1TS_REG = (1 << PIN_CLK) | (1 << PIN_MOSI) | (1 << PIN_DC) | (1 << PIN_RST) | (1 << PIN_CS);
@@ -267,6 +287,11 @@ void st7789_draw_string(unsigned short x, unsigned short y, const char *str, uns
     }
 }
 
+void st7789_draw_vline(unsigned short x, unsigned short y, unsigned short h, unsigned short color) {
+    if (h == 0) return;
+    st7789_draw_rect(x, y, 1, h, color);
+}
+
 typedef struct block_meta {
     unsigned int size;
     int free;
@@ -398,68 +423,605 @@ void st7789_run_text_editor() {
     }
 }
 
-void st7789_run_sys_monitor() {
+typedef struct SnakeNode {
+    int x;
+    int y;
+    struct SnakeNode *next;
+} SnakeNode_t;
+
+unsigned int prng_state = 0;
+
+int custom_rand() {
+    if (prng_state == 0) prng_state = get_ccount();
+    prng_state = (prng_state * 1103515245 + 12345) & 0x7FFFFFFF;
+    return prng_state;
+}
+
+void st7789_run_snake() {
     st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 30, COLOR_BLUE);
-    st7789_draw_string(10, 10, "SYSTEM MONITOR ['q' to Exit]", COLOR_WHITE, COLOR_BLUE);
-    st7789_draw_string(10, 50, "CPU Core:   Xtensa LX6", COLOR_CYAN, COLOR_BLACK);
-    st7789_draw_string(10, 70, "Clock:      Calibrating...", COLOR_CYAN, COLOR_BLACK);
-    st7789_draw_string(10, 90, "Display:    ST7789 (VSPI)", COLOR_CYAN, COLOR_BLACK);
-    st7789_draw_string(10, 130, "Total SRAM: 32768 Bytes", COLOR_YELLOW, COLOR_BLACK);
+    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
+    st7789_draw_string(5, 6, "SNAKE ['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
     
-    char num_buf[16];
-    
+    st7789_draw_string(150, 6, "Score: 0", COLOR_WHITE, COLOR_GRAY);
+
+    SnakeNode_t *head = (SnakeNode_t *)custom_malloc(sizeof(SnakeNode_t));
+    if (!head) return;
+    head->x = 12; 
+    head->y = 16;
+    head->next = (void*)0;
+
+    int dx = 1, dy = 0;
+    int apple_x = 0, apple_y = 0;
+    int score = 0;
+    int game_over = 0;
+    char buf[8];
+
+    prng_state = get_ccount();
+    apple_x = (custom_rand() % 22) + 1; 
+    apple_y = (custom_rand() % 28) + 3; 
+    st7789_draw_rect(apple_x * 10, apple_y * 10, 10, 10, COLOR_RED);
+
     while (1) {
-        unsigned int start_cycles = get_ccount();
-
-        unsigned int free_mem = get_free_heap();
-        unsigned int used_mem = HEAP_SIZE - free_mem;
-        
-        st7789_draw_string(10, 150, "Used SRAM:  ", COLOR_YELLOW, COLOR_BLACK);
-        custom_itoa(used_mem, num_buf);
-        st7789_draw_string(110, 150, "        ", COLOR_BLACK, COLOR_BLACK); 
-        st7789_draw_string(110, 150, num_buf, COLOR_WHITE, COLOR_BLACK);
-        
-        st7789_draw_string(10, 170, "Free SRAM:  ", COLOR_YELLOW, COLOR_BLACK);
-        custom_itoa(free_mem, num_buf);
-        st7789_draw_string(110, 170, "        ", COLOR_BLACK, COLOR_BLACK); 
-        st7789_draw_string(110, 170, num_buf, COLOR_WHITE, COLOR_BLACK);
-
-        // Fetch absolute global hardware time
-        update_uptime();
-        unsigned int secs = global_uptime_sec;
-
-        st7789_draw_string(10, 210, "Uptime (s): ", COLOR_MAGENTA, COLOR_BLACK);
-        custom_itoa(secs, num_buf);
-        st7789_draw_string(110, 210, "        ", COLOR_BLACK, COLOR_BLACK); 
-        st7789_draw_string(110, 210, num_buf, COLOR_WHITE, COLOR_BLACK);
-
         if (uart_has_char()) {
-            char c = uart_getchar();
-            if (c == 'q') return;
+            char in = uart_getchar();
+            if (in == 'q') {
+                SnakeNode_t *curr = head;
+                while (curr != (void*)0) {
+                    SnakeNode_t *next = curr->next;
+                    custom_free(curr);
+                    curr = next;
+                }
+                return;
+            }
+            if (!game_over) {
+                if (in == 'w' && dy == 0) { dx = 0; dy = -1; }
+                else if (in == 's' && dy == 0) { dx = 0; dy = 1; }
+                else if (in == 'a' && dx == 0) { dx = -1; dy = 0; }
+                else if (in == 'd' && dx == 0) { dx = 1; dy = 0; }
+            }
         }
 
-        unsigned int end_cycles = get_ccount();
-        unsigned int active_cycles = end_cycles - start_cycles;
-        unsigned int idle_cycles = 100000 * CYCLES_PER_US; 
-        unsigned int total_cycles = active_cycles + idle_cycles;
-        unsigned int cpu_load = (active_cycles * 100) / total_cycles;
+        if (game_over) {
+            st7789_draw_string(80, 160, "GAME OVER", COLOR_RED, COLOR_BLACK);
+            delay_us(100000);
+            continue;
+        }
 
-        st7789_draw_string(10, 190, "CPU Load:   ", COLOR_RED, COLOR_BLACK);
-        custom_itoa(cpu_load, num_buf);
-        st7789_draw_string(110, 190, "    ", COLOR_BLACK, COLOR_BLACK); 
-        st7789_draw_string(110, 190, num_buf, COLOR_WHITE, COLOR_BLACK);
-        st7789_draw_string(140, 190, "%", COLOR_WHITE, COLOR_BLACK);
+        int next_x = head->x + dx;
+        int next_y = head->y + dy;
+
+        if (next_x < 0 || next_x >= 24 || next_y < 2 || next_y >= 32) {
+            game_over = 1;
+            continue;
+        }
+
+        SnakeNode_t *check = head;
+        int collision = 0;
+        while (check != (void*)0) {
+            if (check->x == next_x && check->y == next_y) collision = 1;
+            check = check->next;
+        }
+        if (collision) {
+            game_over = 1;
+            continue;
+        }
+
+        SnakeNode_t *new_head = (SnakeNode_t *)custom_malloc(sizeof(SnakeNode_t));
+        new_head->x = next_x;
+        new_head->y = next_y;
+        new_head->next = head;
+        head = new_head;
+
+        st7789_draw_rect(head->x * 10, head->y * 10, 10, 10, COLOR_GREEN);
+
+        if (next_x == apple_x && next_y == apple_y) {
+            score++;
+            custom_itoa(score, buf);
+            st7789_draw_string(150, 6, "Score:    ", COLOR_WHITE, COLOR_GRAY);
+            st7789_draw_string(206, 6, buf, COLOR_YELLOW, COLOR_GRAY);
+
+            int valid_apple = 0;
+            while (!valid_apple) {
+                apple_x = (custom_rand() % 22) + 1;
+                apple_y = (custom_rand() % 28) + 3;
+                valid_apple = 1;
+                SnakeNode_t *c = head;
+                while (c != (void*)0) {
+                    if (c->x == apple_x && c->y == apple_y) valid_apple = 0;
+                    c = c->next;
+                }
+            }
+            st7789_draw_rect(apple_x * 10, apple_y * 10, 10, 10, COLOR_RED);
+        } else {
+            SnakeNode_t *curr = head;
+            while (curr->next != (void*)0 && curr->next->next != (void*)0) {
+                curr = curr->next;
+            }
+            st7789_draw_rect(curr->next->x * 10, curr->next->y * 10, 10, 10, COLOR_BLACK);
+            custom_free(curr->next);
+            curr->next = (void*)0;
+        }
+
+        delay_us(80000); 
+    }
+}
+void st7789_run_block_breaker() {
+    st7789_fill_screen(COLOR_BLACK);
+    
+    // Draw the Top UI Bar
+    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
+    st7789_draw_string(5, 6, "['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
+    st7789_draw_string(95, 6, "Blk: 40", COLOR_WHITE, COLOR_GRAY);
+    st7789_draw_string(165, 6, "Pts: 0", COLOR_WHITE, COLOR_GRAY);
+
+    unsigned char blocks[5][8];
+    unsigned short colors[5] = {COLOR_RED, COLOR_YELLOW, COLOR_GREEN, COLOR_CYAN, COLOR_MAGENTA};
+    
+    int blocks_left = 40; 
+    int game_state = 0;   
+    int score = 0;
+    char ui_buf[10];
+
+    for (int r = 0; r < 5; r++) {
+        for (int c = 0; c < 8; c++) {
+            blocks[r][c] = 1;
+            int bx = c * 30 + 1;
+            int by = r * 15 + 30;
+            st7789_draw_rect(bx, by, 28, 13, colors[r]);
+        }
+    }
+
+    int ball_x = 120, ball_y = 200;
+    int ball_dx = 5, ball_dy = -5; 
+    
+    int paddle_w = 50, paddle_h = 6;
+    int paddle_x = 95, paddle_y = 300;
+
+    st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
+
+    while (1) {
+        int old_paddle_x = paddle_x;
+
+        if (uart_has_char()) {
+            char in = uart_getchar();
+            if (in == 'q') return; 
+            
+            if (game_state == 0) {
+                if (in == 'a') {
+                    paddle_x -= 20;
+                    if (paddle_x < 0) paddle_x = 0; 
+                }
+                if (in == 'd') {
+                    paddle_x += 20;
+                    if (paddle_x > 240 - paddle_w) paddle_x = 240 - paddle_w; 
+                }
+            }
+        }
+
+        if (game_state != 0) {
+            if (game_state == 1) {
+                st7789_draw_string(75, 160, "GAME OVER", COLOR_RED, COLOR_BLACK);
+            } else if (game_state == 2) {
+                st7789_draw_string(80, 160, "YOU WIN!", COLOR_GREEN, COLOR_BLACK);
+            }
+            delay_us(100000); 
+            continue; 
+        }
+
+        st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_BLACK);
+
+        if (old_paddle_x != paddle_x) {
+            st7789_draw_rect(old_paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLACK);
+        }
+
+        ball_x += ball_dx;
+        ball_y += ball_dy;
+
+        if (ball_x <= 0) { ball_x = 0; ball_dx = -ball_dx; }
+        if (ball_x >= 236) { ball_x = 236; ball_dx = -ball_dx; }
+        if (ball_y <= 20) { ball_y = 20; ball_dy = -ball_dy; } // Bounces safely below the UI bar
+
+        if (ball_y >= 316) {
+            game_state = 1; 
+            continue;
+        }
+
+        if (ball_y + 4 >= paddle_y && ball_y <= paddle_y + paddle_h && 
+            ball_x + 4 >= paddle_x && ball_x <= paddle_x + paddle_w) {
+            ball_dy = -ball_dy;
+            ball_y = paddle_y - 4; 
+        }
+
+        int hit = 0;
+        for (int r = 0; r < 5 && !hit; r++) {
+            for (int c = 0; c < 8 && !hit; c++) {
+                if (blocks[r][c]) {
+                    int bx = c * 30 + 1;
+                    int by = r * 15 + 30;
+                    
+                    if (ball_x + 4 >= bx && ball_x <= bx + 28 && 
+                        ball_y + 4 >= by && ball_y <= by + 13) {
+                        
+                        blocks[r][c] = 0; 
+                        st7789_draw_rect(bx, by, 28, 13, COLOR_BLACK); 
+                        ball_dy = -ball_dy; 
+                        hit = 1;
+                        
+                        // --- UI UPDATE LOGIC ---
+                        blocks_left--;
+                        score += 100;
+                        
+                        // Update Blocks Left Counter (starts at x=135)
+                        custom_itoa(blocks_left, ui_buf);
+                        st7789_draw_string(135, 6, "  ", COLOR_WHITE, COLOR_GRAY); // Erase old numbers
+                        st7789_draw_string(135, 6, ui_buf, COLOR_WHITE, COLOR_GRAY);
+                        
+                        // Update Score Counter (starts at x=205)
+                        custom_itoa(score, ui_buf);
+                        st7789_draw_string(205, 6, "    ", COLOR_WHITE, COLOR_GRAY); // Erase old numbers
+                        st7789_draw_string(205, 6, ui_buf, COLOR_WHITE, COLOR_GRAY);
+                        
+                        if (blocks_left == 0) game_state = 2;
+                    }
+                }
+            }
+        }
+
+        st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_WHITE);
+        st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
+
+        delay_us(33000); 
+    }
+}
+
+
+void st7789_run_sys_monitor() {
+    st7789_fill_screen(COLOR_BLACK);
+    st7789_draw_rect(0, 0, 240, 20, COLOR_BLUE);
+    st7789_draw_string(5, 6, "SYS MONITOR ['q' = Exit]", COLOR_WHITE, COLOR_BLUE);
+
+    st7789_draw_string(10, 30, "Clock: 40MHz XTAL", COLOR_CYAN, COLOR_BLACK);
+    st7789_draw_string(10, 45, "SRAM:  32768 Bytes Total", COLOR_CYAN, COLOR_BLACK);
+
+    st7789_draw_string(10, 110, "CPU Load %", COLOR_GRAY, COLOR_BLACK);
+    st7789_draw_rect(10, 124, 202, 52, COLOR_WHITE);
+    st7789_draw_rect(11, 125, 200, 50, COLOR_BLACK);
+
+    st7789_draw_string(10, 190, "SRAM Usage", COLOR_GRAY, COLOR_BLACK);
+    st7789_draw_rect(10, 204, 202, 52, COLOR_WHITE);
+    st7789_draw_rect(11, 205, 200, 50, COLOR_BLACK);
+
+    unsigned char cpu_hist[200];
+    unsigned short sram_hist[200];
+    for(int i = 0; i < 200; i++) { 
+        cpu_hist[i] = 0; 
+        sram_hist[i] = 0; 
+    }
+
+    char buf[16];
+
+    while(1) {
+        unsigned int start = get_ccount();
+        unsigned int free_m = get_free_heap();
+        unsigned int used_m = HEAP_SIZE - free_m;
+
+        st7789_draw_string(10, 65, "Used: ", COLOR_YELLOW, COLOR_BLACK);
+        custom_itoa(used_m, buf);
+        st7789_draw_string(60, 65, "      ", COLOR_BLACK, COLOR_BLACK);
+        st7789_draw_string(60, 65, buf, COLOR_WHITE, COLOR_BLACK);
+
+        update_uptime();
         
-        delay_us(100000); 
+        st7789_draw_string(120, 65, "Up: ", COLOR_MAGENTA, COLOR_BLACK);
+        custom_itoa(global_uptime_sec, buf);
+        st7789_draw_string(150, 65, "      ", COLOR_BLACK, COLOR_BLACK);
+        st7789_draw_string(150, 65, buf, COLOR_WHITE, COLOR_BLACK);
+
+        if (uart_has_char()) {
+            if (uart_getchar() == 'q') return;
+        }
+
+        unsigned int end = get_ccount();
+        unsigned int act = end - start;
+        unsigned int idle = 100000 * CYCLES_PER_US;
+        unsigned int tot = act + idle;
+        unsigned int cpu = (act * 100) / tot;
+
+        st7789_draw_string(10, 80, "CPU:  ", COLOR_RED, COLOR_BLACK);
+        custom_itoa(cpu, buf);
+        st7789_draw_string(60, 80, "    ", COLOR_BLACK, COLOR_BLACK);
+        st7789_draw_string(60, 80, buf, COLOR_WHITE, COLOR_BLACK);
+        st7789_draw_string(85, 80, "%", COLOR_WHITE, COLOR_BLACK);
+
+        for (int i = 0; i < 199; i++) {
+            cpu_hist[i] = cpu_hist[i + 1];
+            sram_hist[i] = sram_hist[i + 1];
+        }
+        cpu_hist[199] = (cpu > 100) ? 100 : cpu;
+        sram_hist[199] = used_m;
+
+        for (int i = 0; i < 200; i++) {
+            unsigned int c_h = (cpu_hist[i] * 50) / 100;
+            unsigned int s_h = (sram_hist[i] * 50) / HEAP_SIZE;
+
+            st7789_draw_vline(11 + i, 125, 50, COLOR_BLACK);
+            if (c_h > 0) st7789_draw_vline(11 + i, 125 + (50 - c_h), c_h, COLOR_RED);
+
+            st7789_draw_vline(11 + i, 205, 50, COLOR_BLACK);
+            if (s_h > 0) st7789_draw_vline(11 + i, 205 + (50 - s_h), s_h, COLOR_GREEN);
+        }
+
+        delay_us(100000);
+    }
+}
+
+const unsigned short tetris_pieces[7][4] = {
+    { 0x0F00, 0x2222, 0x0F00, 0x2222 }, // I
+    { 0x44C0, 0x8E00, 0x6440, 0x0E20 }, // J
+    { 0x4460, 0x0E80, 0xC440, 0x2E00 }, // L
+    { 0xCC00, 0xCC00, 0xCC00, 0xCC00 }, // O
+    { 0x06C0, 0x8C40, 0x06C0, 0x8C40 }, // S
+    { 0x0E40, 0x4C40, 0x4E00, 0x4640 }, // T
+    { 0x0C60, 0x4C80, 0x0C60, 0x4C80 }  // Z
+};
+
+const unsigned short tetris_colors[7] = {
+    COLOR_CYAN, COLOR_BLUE, COLOR_ORANGE, COLOR_YELLOW, 
+    COLOR_GREEN, COLOR_MAGENTA, COLOR_RED
+};
+
+// Helper: Checks if the 4x4 bitmask hits a wall or locked block
+int tetris_check_collision(unsigned short board[20][10], int piece, int rot, int px, int py) {
+    unsigned short mask = tetris_pieces[piece][rot];
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (mask & (1 << (15 - (r * 4 + c)))) {
+                int bx = px + c;
+                int by = py + r;
+                if (bx < 0 || bx >= 10 || by >= 20) return 1; 
+                if (by >= 0 && board[by][bx]) return 1; 
+            }
+        }
+    }
+    return 0;
+}
+
+// Helper: Renders the bitmask to the screen
+void tetris_draw_piece(int piece, int rot, int px, int py, unsigned short color) {
+    unsigned short mask = tetris_pieces[piece][rot];
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (mask & (1 << (15 - (r * 4 + c)))) {
+                int bx = px + c;
+                int by = py + r;
+                if (by >= 0) { // Only draw if inside the board
+                    st7789_draw_rect(70 + bx * 10, 60 + by * 10, 9, 9, color);
+                }
+            }
+        }
+    }
+}
+
+// Helper: Draws the "Next" piece in the UI area on the right
+void tetris_draw_next_piece(int piece, unsigned short color) {
+    unsigned short mask = tetris_pieces[piece][0]; // Always show default rotation
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (mask & (1 << (15 - (r * 4 + c)))) {
+                st7789_draw_rect(180 + c * 10, 75 + r * 10, 9, 9, color);
+            }
+        }
+    }
+}
+
+void st7789_run_tetris() {
+    st7789_fill_screen(COLOR_BLACK);
+    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
+    st7789_draw_string(5, 6, "TETRIS ['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
+
+    // Draw Board Borders (10x20 grid, 10px per block -> 100x200 total size)
+    st7789_draw_rect(68, 58, 104, 204, COLOR_WHITE); // Outer border
+    st7789_draw_rect(70, 60, 100, 200, COLOR_BLACK); // Inner playfield
+
+    // Draw Right Side UI (spaced out safely to avoid bounding box collisions)
+    st7789_draw_string(180, 60, "NEXT:", COLOR_WHITE, COLOR_BLACK);
+    st7789_draw_string(175, 145, "SCORE:", COLOR_WHITE, COLOR_BLACK);
+    st7789_draw_string(175, 160, "0", COLOR_YELLOW, COLOR_BLACK);
+    
+    unsigned short board[20][10];
+    for (int r = 0; r < 20; r++)
+        for (int c = 0; c < 10; c++)
+            board[r][c] = 0;
+
+    if (prng_state == 0) prng_state = get_ccount();
+
+    int cur_p = custom_rand() % 7;
+    int next_p = custom_rand() % 7; // Initialize next piece preview
+    int cur_r = 0;
+    int cur_x = 3, cur_y = -3; // Spawn slightly above the board
+    
+    int gravity_timer = 0;
+    int game_over = 0;
+    
+    // UI Variables
+    int score = 0;
+    char score_buf[10];
+
+    // Draw the very first next piece preview
+    tetris_draw_next_piece(next_p, tetris_colors[next_p]);
+
+    while (1) {
+        if (uart_has_char()) {
+            char in = uart_getchar();
+            if (in == 'q') return;
+
+            if (!game_over) {
+                tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); // Erase old
+
+                if (in == 'a' && !tetris_check_collision(board, cur_p, cur_r, cur_x - 1, cur_y)) cur_x--;
+                if (in == 'd' && !tetris_check_collision(board, cur_p, cur_r, cur_x + 1, cur_y)) cur_x++;
+                if (in == 's' && !tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y + 1)) cur_y++; // Soft drop
+                if (in == 'w') { // Rotate
+                    int new_r = (cur_r + 1) % 4;
+                    if (!tetris_check_collision(board, cur_p, new_r, cur_x, cur_y)) {
+                        cur_r = new_r;
+                    }
+                }
+            }
+        }
+
+        if (game_over) {
+            st7789_draw_string(85, 150, "GAME OVER", COLOR_RED, COLOR_BLACK);
+            delay_us(100000);
+            continue;
+        }
+
+        // Apply Gravity every ~500ms
+        gravity_timer++;
+        if (gravity_timer >= 15) { 
+            gravity_timer = 0;
+            tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); // Erase old
+
+            if (!tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y + 1)) {
+                cur_y++;
+            } else {
+                // LOCK PIECE INTO BOARD
+                unsigned short mask = tetris_pieces[cur_p][cur_r];
+                for (int r = 0; r < 4; r++) {
+                    for (int c = 0; c < 4; c++) {
+                        if (mask & (1 << (15 - (r * 4 + c)))) {
+                            int bx = cur_x + c;
+                            int by = cur_y + r;
+                            if (by < 0) game_over = 1; // Locked above screen = death
+                            else {
+                                board[by][bx] = tetris_colors[cur_p];
+                                st7789_draw_rect(70 + bx * 10, 60 + by * 10, 9, 9, tetris_colors[cur_p]);
+                            }
+                        }
+                    }
+                }
+
+                // 2. LINE CLEAR CHECK
+                int redraw_board = 0;
+                int lines_cleared_this_turn = 0;
+
+                for (int r = 19; r >= 0; r--) {
+                    int full = 1;
+                    for (int c = 0; c < 10; c++) {
+                        if (board[r][c] == 0) {
+                            full = 0;
+                            break;
+                        }
+                    }
+                    
+                    if (full) {
+                        lines_cleared_this_turn++;
+                        
+                        // Shift all rows down above this row
+                        for (int sr = r; sr > 0; sr--) {
+                            for (int c = 0; c < 10; c++) {
+                                board[sr][c] = board[sr - 1][c];
+                            }
+                        }
+                        // Clear the absolute top row
+                        for (int c = 0; c < 10; c++) {
+                            board[0][c] = 0;
+                        }
+                        r++; // Re-check the same row index since everything dropped down
+                    }
+                }
+
+                if (lines_cleared_this_turn > 0) {
+                    redraw_board = 1;
+                    score += (lines_cleared_this_turn * 100);
+                    
+                    // Convert score and cleanly draw it using differential spacing
+                    custom_itoa(score, score_buf);
+                    st7789_draw_string(175, 160, "      ", COLOR_BLACK, COLOR_BLACK); // Clear old score area
+                    st7789_draw_string(175, 160, score_buf, COLOR_YELLOW, COLOR_BLACK); // Draw new score
+                }
+
+                if (redraw_board) {
+                    st7789_draw_rect(70, 60, 100, 200, COLOR_BLACK);
+                    for (int r = 0; r < 20; r++) {
+                        for (int c = 0; c < 10; c++) {
+                            if (board[r][c]) {
+                                st7789_draw_rect(70 + c * 10, 60 + r * 10, 9, 9, board[r][c]);
+                            }
+                        }
+                    }
+                }
+
+                // SPAWN NEW PIECE & UPDATE NEXT PREVIEW
+                tetris_draw_next_piece(next_p, COLOR_BLACK); // Erase old preview block
+                
+                cur_p = next_p;
+                next_p = custom_rand() % 7;
+                cur_r = 0;
+                cur_x = 3; cur_y = -3;
+                
+                tetris_draw_next_piece(next_p, tetris_colors[next_p]); // Draw new preview block
+
+                if (tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y)) game_over = 1;
+            }
+        }
+
+        // Draw current moving piece
+        if (!game_over) {
+            tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, tetris_colors[cur_p]);
+        }
+
+        delay_us(33000); // 30 FPS core loop
+    }
+}
+
+void st7789_run_games_menu() {
+    int game_selection = 0;
+    int redraw = 1;
+    
+    while(1) {
+        if (redraw) {
+            st7789_fill_screen(COLOR_BLACK);
+            st7789_draw_rect(0, 0, 240, 30, COLOR_BLUE);
+            st7789_draw_string(10, 10, "GAMES MENU ['q'=Back]", COLOR_WHITE, COLOR_BLUE);
+
+            st7789_draw_string(40, 70, "1. Snake", 
+                game_selection == 0 ? COLOR_BLACK : COLOR_WHITE, 
+                game_selection == 0 ? COLOR_GREEN : COLOR_BLACK);
+                
+            st7789_draw_string(40, 100, "2. Block Breaker", 
+                game_selection == 1 ? COLOR_BLACK : COLOR_WHITE, 
+                game_selection == 1 ? COLOR_GREEN : COLOR_BLACK);
+                
+            st7789_draw_string(40, 130, "3. Tetris", 
+                game_selection == 2 ? COLOR_BLACK : COLOR_WHITE, 
+                game_selection == 2 ? COLOR_GREEN : COLOR_BLACK);
+                
+            redraw = 0;
+        }
+
+        if (uart_has_char()) {
+            char in = uart_getchar();
+            if (in == 'q') return; // Exit to main OS
+            if (in == 'w' && game_selection > 0) { game_selection--; redraw = 1; }
+            if (in == 's' && game_selection < 2) { game_selection++; redraw = 1; }
+            if (in == 'e') {
+                if (game_selection == 0) st7789_run_snake();
+                if (game_selection == 1) st7789_run_block_breaker();
+                if (game_selection == 2) st7789_run_tetris();
+                
+                redraw = 1; // Repaint menu when returning from game
+            }
+        }
+        delay_us(50000); 
     }
 }
 
 const char *menu_items[] = {
     "System Monitor",
     "Text Editor",
-    "Retro Games",
-    "File Explorer (Media)",
+    "Games",
+    "File Explorer",
     "About the Creator"
 };
 const int TOTAL_MENU_ITEMS = 5;
@@ -530,7 +1092,9 @@ void kernel_main() {
                     st7789_init_menu(current_selection);
                 } else if (current_selection == 2) {
                     current_state = STATE_APP_GAMES;
-                    st7789_run_app_placeholder("RETRO GAMES", "Tetris Engine");
+                    st7789_run_games_menu();
+                    current_state = STATE_MENU;
+                    st7789_init_menu(current_selection);
                 } else if (current_selection == 3) {
                     current_state = STATE_APP_EXPLORER;
                     st7789_run_app_placeholder("FILE EXPLORER", "Mounting MicroSD...");
