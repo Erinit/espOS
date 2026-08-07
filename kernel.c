@@ -1,3 +1,24 @@
+
+// Classic Windows RGB565 Palette
+#define WIN_DESKTOP  0x0410 // Deep Teal
+#define WIN_FACE     0xD69A // Classic Light Gray
+#define WIN_TITLE    0x0935 // Dark Blue Title Bar
+#define WIN_SHADOW   0x8410 // Dark Gray (Outer Bevel)
+#define WIN_HILITE   0xFFFF // White (Inner Bevel)
+#define WIN_TEXT     0x0000 // Black
+#define WIN_TEXT_SEL 0xFFFF // White Text on Blue Background
+
+#define COLOR_BLACK   0x0000
+#define COLOR_WHITE   0xFFFF
+#define COLOR_RED     0xF800
+#define COLOR_GREEN   0x07E0
+#define COLOR_BLUE    0x001F
+#define COLOR_YELLOW  0xFFE0
+#define COLOR_CYAN    0x07FF
+#define COLOR_MAGENTA 0xF81F
+#define COLOR_GRAY    0x8410
+#define COLOR_ORANGE 0xFD20
+
 static inline unsigned int get_ccount(void) {
     unsigned int ccount;
     __asm__ __volatile__("rsr %0, ccount" : "=a"(ccount));
@@ -44,6 +65,34 @@ void delay_us(unsigned int us) {
 #define UART0_BASE       0x3FF40000UL
 #define UART0_FIFO_REG   ((volatile unsigned int *)(UART0_BASE + 0x00))
 #define UART0_STATUS_REG ((volatile unsigned int *)(UART0_BASE + 0x1C))
+#define UART0_FIFO (*(volatile unsigned int *)(0x3FF40000))
+
+#define GPIO_IN_REG              (*(volatile unsigned int *)0x3FF4403C)
+#define GPIO_ENABLE_W1TC_REG     (*(volatile unsigned int *)0x3FF44028)
+
+// --- JOYSTICK ADC & GPIO REGISTERS ---
+#define SENS_BASE                 0x3FF48800UL
+#define SENS_SAR_READ_CTRL_REG    (*(volatile unsigned int *)(SENS_BASE + 0x00))
+#define SENS_SAR_MEAS_WAIT2_REG   (*(volatile unsigned int *)(SENS_BASE + 0x0C))
+#define SENS_SAR_ATTEN1_REG       (*(volatile unsigned int *)(SENS_BASE + 0x34)) // CORRECTED OFFSET
+#define SENS_SAR_MEAS_START1_REG  (*(volatile unsigned int *)(SENS_BASE + 0x54)) // CORRECTED OFFSET
+
+// --- CORRECTED RTC IO REGISTERS ---
+#define RTC_IO_BASE               0x3FF48400UL
+#define RTC_IO_TOUCH_PAD9_REG     (*(volatile unsigned int *)(RTC_IO_BASE + 0xA8)) // GPIO 32 (was 0x9C)
+#define RTC_IO_TOUCH_PAD8_REG     (*(volatile unsigned int *)(RTC_IO_BASE + 0xA4)) // GPIO 33 (was 0x98)
+
+// Sends a single character
+void uart_putc(char c) {
+    UART0_FIFO = c;
+}
+
+// Sends an entire string (loops through putc until it hits the null terminator)
+void uart_puts(const char *str) {
+    while (*str) {
+        uart_putc(*str++);
+    }
+}
 
 char uart_getchar() {
     while ((*UART0_STATUS_REG & 0xFF) == 0) {
@@ -116,25 +165,6 @@ void *memset(void *s, int c, unsigned int n) {
 #define PIN_CLK  18
 #define PIN_MOSI 23
 
-// Classic Windows RGB565 Palette
-#define WIN_DESKTOP  0x0410 // Deep Teal
-#define WIN_FACE     0xD69A // Classic Light Gray
-#define WIN_TITLE    0x0935 // Dark Blue Title Bar
-#define WIN_SHADOW   0x8410 // Dark Gray (Outer Bevel)
-#define WIN_HILITE   0xFFFF // White (Inner Bevel)
-#define WIN_TEXT     0x0000 // Black
-#define WIN_TEXT_SEL 0xFFFF // White Text on Blue Background
-
-#define COLOR_BLACK   0x0000
-#define COLOR_WHITE   0xFFFF
-#define COLOR_RED     0xF800
-#define COLOR_GREEN   0x07E0
-#define COLOR_BLUE    0x001F
-#define COLOR_YELLOW  0xFFE0
-#define COLOR_CYAN    0x07FF
-#define COLOR_MAGENTA 0xF81F
-#define COLOR_GRAY    0x8410
-#define COLOR_ORANGE 0xFD20
 
 void spi_init() {
     GPIO_ENABLE_W1TS_REG = (1 << PIN_CLK) | (1 << PIN_MOSI) | (1 << PIN_DC) | (1 << PIN_RST) | (1 << PIN_CS);
@@ -439,30 +469,39 @@ void run_ram_file_browser() {
     int previous_cursor = -1;
     int previous_action = -1;
 
-    st7789_fill_screen(0x0000);
-
     while(1) {
         
         // ==========================================
-        // STATE 0: THE FILE LIST
+        // STATE 0: EXPLORER.EXE (File List)
         // ==========================================
         if (browser_state == 0) {
-            if (previous_cursor != cursor) {
-                st7789_draw_string(0, 0, "-- RAM DISK FILES --", 0x07E0, 0x0000);
-                
+            // Draw window frame only when first entering the state
+            if (previous_cursor == -1) {
+                st7789_fill_screen(WIN_DESKTOP);
+                draw_win2k_window(10, 10, 220, 300, "Explorer.exe");
+                st7789_draw_string(20, 290, "e:Options  q:Exit", WIN_TEXT, WIN_FACE);
+
+                // Sunken white canvas for file list
+                st7789_draw_rect(18, 38, 204, 244, WIN_SHADOW);
+                st7789_draw_rect(19, 39, 202, 242, WIN_HILITE);
+            }
+
+            if (previous_cursor != cursor || previous_cursor == -1) {
                 if (ram_file_count == 0) {
-                    st7789_draw_string(0, 24, "DISK EMPTY", 0xF800, 0x0000);
+                    st7789_draw_string(25, 45, "Folder is Empty", WIN_TEXT, WIN_HILITE);
                 } else {
                     for (int i = 0; i < ram_file_count; i++) {
-                        int y_pos = 24 + (i * 16); 
-                        unsigned int color = (i == cursor) ? 0xFFE0 : 0xFFFF; // Yellow / White
+                        int y_pos = 45 + (i * 16); 
                         
+                        // Differential Highlighting
                         if (i == cursor) {
-                            st7789_draw_string(0, y_pos, "> FILE  ", color, 0x0000);
-                            st7789_draw_char(64, y_pos, '1' + i, color, 0x0000);
+                            st7789_draw_rect(20, y_pos - 2, 198, 16, WIN_TITLE);
+                            st7789_draw_string(25, y_pos, "FILE", WIN_TEXT_SEL, WIN_TITLE);
+                            st7789_draw_char(65, y_pos, '1' + i, WIN_TEXT_SEL, WIN_TITLE);
                         } else {
-                            st7789_draw_string(0, y_pos, "  FILE  ", color, 0x0000);
-                            st7789_draw_char(64, y_pos, '1' + i, color, 0x0000);
+                            st7789_draw_rect(20, y_pos - 2, 198, 16, WIN_HILITE); // Erase with white
+                            st7789_draw_string(25, y_pos, "FILE", WIN_TEXT, WIN_HILITE);
+                            st7789_draw_char(65, y_pos, '1' + i, WIN_TEXT, WIN_HILITE);
                         }
                     }
                 }
@@ -474,32 +513,39 @@ void run_ram_file_browser() {
             if (in == 'w' && cursor > 0) cursor--;
             if (in == 's' && cursor < ram_file_count - 1) cursor++;
             if (in == 'e' && ram_file_count > 0) {
-                browser_state = 1; // Jump to Action Menu
+                browser_state = 1; // Jump to Action Menu pop-up
                 previous_action = -1;
                 action_cursor = 0;
-                st7789_fill_screen(0x0000);
             }
-            if (in == 'q') break; // Exit Explorer entirely
+            if (in == 'q') {
+                // Return to main OS menu
+                st7789_fill_screen(COLOR_BLACK); 
+                break; 
+            }
         } 
         
         // ==========================================
-        // STATE 1: THE ACTION MENU
+        // STATE 1: FLOATING ACTION MENU POP-UP
         // ==========================================
         else if (browser_state == 1) {
-            if (previous_action != action_cursor) {
-                st7789_draw_string(0, 0, "-- FILE OPTIONS --", 0x07E0, 0x0000);
-                const char* actions[] = {"READ", "EDIT", "DELETE"};
+            if (previous_action == -1) {
+                // Draw a smaller window layered perfectly over Explorer
+                draw_win2k_window(45, 100, 150, 100, "Options");
+            }
+
+            if (previous_action != action_cursor || previous_action == -1) {
+                const char* actions[] = {"Read", "Edit", "Delete"};
                 
                 for (int i = 0; i < 3; i++) {
-                    int y_pos = 24 + (i * 16);
-                    unsigned int color = (i == action_cursor) ? 0xFFE0 : 0xFFFF;
+                    int y_pos = 130 + (i * 20);
                     
                     if (i == action_cursor) {
-                        st7789_draw_string(0, y_pos, "> ", color, 0x0000);
+                        st7789_draw_rect(55, y_pos - 2, 130, 16, WIN_TITLE);
+                        st7789_draw_string(65, y_pos, actions[i], WIN_TEXT_SEL, WIN_TITLE);
                     } else {
-                        st7789_draw_string(0, y_pos, "  ", color, 0x0000);
+                        st7789_draw_rect(55, y_pos - 2, 130, 16, WIN_FACE);
+                        st7789_draw_string(65, y_pos, actions[i], WIN_TEXT, WIN_FACE);
                     }
-                    st7789_draw_string(16, y_pos, actions[i], color, 0x0000);
                 }
                 previous_action = action_cursor;
             }
@@ -510,74 +556,76 @@ void run_ram_file_browser() {
             if (in == 's' && action_cursor < 2) action_cursor++;
             if (in == 'q') {
                 browser_state = 0; // Back to File List
-                previous_cursor = -1;
-                st7789_fill_screen(0x0000);
+                previous_cursor = -1; // Triggers full Explorer redraw
             }
             if (in == 'e') {
                 if (action_cursor == 0) {
-                    browser_state = 2; // Enter Read Mode
-                    st7789_fill_screen(0x0000);
+                    browser_state = 2; // Read Mode
+                    // Draw Notepad Window Frame
+                    st7789_fill_screen(WIN_DESKTOP);
+                    draw_win2k_window(5, 5, 230, 310, "Notepad (Read-Only)");
+                    st7789_draw_rect(10, 28, 220, 280, WIN_SHADOW);
+                    st7789_draw_rect(11, 29, 218, 278, WIN_HILITE);
                 } 
                 else if (action_cursor == 1) {
-                    browser_state = 3; // Enter Edit Mode
-                    st7789_fill_screen(0x0000);
+                    browser_state = 3; // Edit Mode
+                    // Draw Notepad Window Frame
+                    st7789_fill_screen(WIN_DESKTOP);
+                    draw_win2k_window(5, 5, 230, 310, "Notepad.exe");
+                    st7789_draw_rect(10, 28, 220, 280, WIN_SHADOW);
+                    st7789_draw_rect(11, 29, 218, 278, WIN_HILITE);
                 } 
                 else if (action_cursor == 2) {
                     // EXECUTING DELETE
-                    custom_free(ram_disk[cursor].content); // Free the memory!
+                    custom_free(ram_disk[cursor].content); 
                     
-                    // Shift the remaining files up to fill the gap
                     for (int i = cursor; i < ram_file_count - 1; i++) {
                         ram_disk[i] = ram_disk[i + 1];
                         ram_disk[i].id = i + 1;
                     }
                     ram_file_count--;
                     
-                    // Keep cursor in bounds
                     if (cursor >= ram_file_count && cursor > 0) cursor--;
                     
-                    // Return to File List
                     browser_state = 0;
-                    previous_cursor = -1;
-                    st7789_fill_screen(0x0000);
+                    previous_cursor = -1; // Triggers full Explorer redraw
                 }
             }
         }
         
         // ==========================================
-        // STATE 2: READ MODE
+        // STATE 2: READ MODE (Notepad Layout)
         // ==========================================
         else if (browser_state == 2) {
-            st7789_draw_string(0, 0, "-- VIEWING FILE --", 0x07E0, 0x0000);
             int len = custom_strlen(ram_disk[cursor].content);
             int start_index = 0;
-            if (len > 1110) start_index = len - 1110;
+            // Notepad Canvas is 27 columns x 34 rows = 918 chars
+            if (len > 918) start_index = len - 918;
             
             int r = 0;
             int c = 0;
             for (int i = start_index; i < len; i++) {
-                st7789_draw_char(c * 8, (r * 8) + 24, ram_disk[cursor].content[i], 0xFFFF, 0x0000);
+                int tx = (c * 8) + 12;
+                int ty = (r * 8) + 30;
+                st7789_draw_char(tx, ty, ram_disk[cursor].content[i], WIN_TEXT, WIN_HILITE);
                 c++;
-                if (c >= 30) {
-                    c = 0;
-                    r++;
-                }
+                if (c >= 27) { c = 0; r++; }
             }
             
-            char in = uart_getchar();
-            if (in == 'q') {
-                browser_state = 1; // Go back to Action Menu
-                previous_action = -1;
-                st7789_fill_screen(0x0000);
+            // Wait for exit
+            while(1) {
+                if (uart_has_char() && uart_getchar() == 'q') {
+                    browser_state = 0; // Go all the way back to Explorer
+                    previous_cursor = -1;
+                    break;
+                }
             }
         }
         
         // ==========================================
-        // STATE 3: EDIT MODE (Append)
+        // STATE 3: EDIT MODE (Notepad Layout)
         // ==========================================
         else if (browser_state == 3) {
-            st7789_draw_string(0, 0, "-- EDITING FILE --", 0x07E0, 0x0000);
-            
             char* text_buffer = ram_disk[cursor].content;
             unsigned int current_length = custom_strlen(text_buffer);
             unsigned int buffer_capacity = current_length + 32;
@@ -590,53 +638,59 @@ void run_ram_file_browser() {
             text_buffer = new_buffer;
             ram_disk[cursor].content = text_buffer;
 
+            // Render existing text into the 27x34 canvas
+            int start_index = 0;
+            if (current_length > 918) start_index = current_length - 918;
+
             int r = 0;
             int c = 0;
-            for (unsigned int i = 0; i < current_length; i++) {
-                st7789_draw_char(c * 8, (r * 8) + 24, text_buffer[i], 0xFFFF, 0x0000);
+            for (unsigned int i = start_index; i < current_length; i++) {
+                int tx = (c * 8) + 12;
+                int ty = (r * 8) + 30;
+                st7789_draw_char(tx, ty, text_buffer[i], WIN_TEXT, WIN_HILITE);
                 c++;
-                if (c >= 30) { c = 0; r++; }
+                if (c >= 27) { c = 0; r++; }
             }
 
             unsigned int last_blink = get_ccount();
             int cursor_state = 0;
 
             while (1) {
+                r = current_length / 27;
+                c = current_length % 27;
+                if (current_length >= 918) { r = 33; c = 26; }
+                int tx = (c * 8) + 12;
+                int ty = (r * 8) + 30;
+
+                // Blinking Black Cursor on White
                 if (get_ccount() - last_blink > 20000000) {
                     cursor_state = !cursor_state;
                     last_blink = get_ccount();
-                    
-                    r = current_length / 30;
-                    c = current_length % 30;
-                    if (current_length >= 1110) { r = 36; c = 29; }
-                    
                     char draw_char = cursor_state ? '_' : ' ';
-                    st7789_draw_char(c * 8, (r * 8) + 24, draw_char, 0xFFFF, 0x0000);
+                    st7789_draw_char(tx, ty, draw_char, WIN_TEXT, WIN_HILITE);
                 }
 
                 if ((*UART0_STATUS_REG & 0xFF) > 0) {
                     char in = uart_getchar();
                     
-                    r = current_length / 30;
-                    c = current_length % 30;
-                    if (current_length >= 1110) { r = 36; c = 29; }
-                    st7789_draw_char(c * 8, (r * 8) + 24, ' ', 0x0000, 0x0000);
+                    st7789_draw_char(tx, ty, ' ', WIN_TEXT, WIN_HILITE); // Erase cursor
 
                     if (in == 'q') {
-                        browser_state = 1;
-                        previous_action = -1;
-                        st7789_fill_screen(0x0000);
+                        browser_state = 0; // Save and jump back to Explorer
+                        previous_cursor = -1;
                         break;
                     }
 
-                    if (in == 127 || in == 8) {
+                    if (in == 127 || in == 8) { // Backspace
                         if (current_length > 0) {
                             current_length--;
                             text_buffer[current_length] = '\0';
                             
-                            r = current_length / 30;
-                            c = current_length % 30;
-                            st7789_draw_char(c * 8, (r * 8) + 24, ' ', 0x0000, 0x0000); 
+                            r = current_length / 27;
+                            c = current_length % 27;
+                            tx = (c * 8) + 12;
+                            ty = (r * 8) + 30;
+                            st7789_draw_char(tx, ty, ' ', WIN_TEXT, WIN_HILITE); 
                         }
                     } 
                     else if (in >= 32 && in <= 126) {
@@ -654,10 +708,20 @@ void run_ram_file_browser() {
 
                         text_buffer[current_length] = in;
                         
-                        r = current_length / 30;
-                        c = current_length % 30;
-                        if (current_length < 1110) { 
-                            st7789_draw_char(c * 8, (r * 8) + 24, in, 0xFFFF, 0x0000);
+                        if (current_length < 918) { 
+                            st7789_draw_char(tx, ty, in, WIN_TEXT, WIN_HILITE);
+                        } else {
+                            // Hardware wipe scrolling
+                            st7789_draw_rect(11, 29, 218, 278, WIN_HILITE);
+                            unsigned int s_idx = current_length - 917;
+                            int temp_r = 0, temp_c = 0;
+                            for (unsigned int i = s_idx; i <= current_length; i++) {
+                                int ttx = (temp_c * 8) + 12;
+                                int tty = (temp_r * 8) + 30;
+                                st7789_draw_char(ttx, tty, text_buffer[i], WIN_TEXT, WIN_HILITE);
+                                temp_c++;
+                                if (temp_c >= 27) { temp_c = 0; temp_r++; }
+                            }
                         }
                         
                         current_length++;
@@ -780,6 +844,26 @@ void run_dynamic_text_editor() {
     }
 }
 
+// --- CUSTOM 8x8 UI ICONS ---
+const unsigned char ICON_SNAKE[8] = { 0x00, 0x78, 0x40, 0x7C, 0x04, 0x3C, 0x00, 0x00 };
+const unsigned char ICON_TETRIS[8] = { 0x00, 0x60, 0x60, 0x78, 0x78, 0x00, 0x00, 0x00 };
+const unsigned char ICON_BRICK[8] = { 0x7E, 0x7E, 0x00, 0x18, 0x18, 0x00, 0x3C, 0x3C };
+const unsigned char ICON_BACK[8] = { 0x10, 0x30, 0x7E, 0xFE, 0x7E, 0x30, 0x10, 0x00 };
+
+// Icon Renderer: Draws the 8x8 mask using 1x1 rectangles
+void st7789_draw_icon(int x, int y, const unsigned char* icon, unsigned short fg, unsigned short bg) {
+    for (int r = 0; r < 8; r++) {
+        unsigned char row = icon[r];
+        for (int c = 0; c < 8; c++) {
+            if (row & (1 << (7 - c))) {
+                st7789_draw_rect(x + c, y + r, 1, 1, fg); // Draw icon pixel
+            } else {
+                st7789_draw_rect(x + c, y + r, 1, 1, bg); // Draw background pixel
+            }
+        }
+    }
+}
+
 typedef struct SnakeNode {
     int x;
     int y;
@@ -795,28 +879,37 @@ int custom_rand() {
 }
 
 void st7789_run_snake() {
-    st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
-    st7789_draw_string(5, 6, "SNAKE ['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
+    // 1. Draw the Desktop and the main Game Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "Snake.exe");
     
-    st7789_draw_string(150, 6, "Score: 0", COLOR_WHITE, COLOR_GRAY);
+    // 2. Draw the Status Bar at the bottom
+    st7789_draw_string(10, 295, "Score: 0", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(140, 295, "['q'=Quit]", WIN_TEXT, WIN_FACE);
+
+    // 3. Draw the sunken black game canvas (220x260 pixels)
+    st7789_draw_rect(9, 29, 222, 262, WIN_SHADOW); 
+    st7789_draw_rect(10, 30, 220, 260, COLOR_BLACK); 
 
     SnakeNode_t *head = (SnakeNode_t *)custom_malloc(sizeof(SnakeNode_t));
     if (!head) return;
-    head->x = 12; 
-    head->y = 16;
+    head->x = 11; // Center of new 22-wide grid
+    head->y = 13; // Center of new 26-tall grid
     head->next = (void*)0;
 
     int dx = 1, dy = 0;
     int apple_x = 0, apple_y = 0;
     int score = 0;
     int game_over = 0;
+    int show_game_over = 0;
     char buf[8];
 
     prng_state = get_ccount();
-    apple_x = (custom_rand() % 22) + 1; 
-    apple_y = (custom_rand() % 28) + 3; 
-    st7789_draw_rect(apple_x * 10, apple_y * 10, 10, 10, COLOR_RED);
+    apple_x = custom_rand() % 22; 
+    apple_y = custom_rand() % 26; 
+    
+    // Grid Offset: X starts at 10, Y starts at 30
+    st7789_draw_rect((apple_x * 10) + 10, (apple_y * 10) + 30, 10, 10, COLOR_RED);
 
     while (1) {
         if (uart_has_char()) {
@@ -828,7 +921,7 @@ void st7789_run_snake() {
                     custom_free(curr);
                     curr = next;
                 }
-                return;
+                return; // Exits back to the OS router
             }
             if (!game_over) {
                 if (in == 'w' && dy == 0) { dx = 0; dy = -1; }
@@ -839,7 +932,12 @@ void st7789_run_snake() {
         }
 
         if (game_over) {
-            st7789_draw_string(80, 160, "GAME OVER", COLOR_RED, COLOR_BLACK);
+            // Draw the error pop-up only once to prevent flickering
+            if (show_game_over == 0) {
+                draw_win2k_window(50, 120, 140, 60, "Info");
+                st7789_draw_string(80, 145, "GAME OVER!", WIN_TEXT, WIN_FACE);
+                show_game_over = 1;
+            }
             delay_us(100000);
             continue;
         }
@@ -847,7 +945,8 @@ void st7789_run_snake() {
         int next_x = head->x + dx;
         int next_y = head->y + dy;
 
-        if (next_x < 0 || next_x >= 24 || next_y < 2 || next_y >= 32) {
+        // Updated boundaries for the 22x26 grid
+        if (next_x < 0 || next_x >= 22 || next_y < 0 || next_y >= 26) {
             game_over = 1;
             continue;
         }
@@ -869,18 +968,21 @@ void st7789_run_snake() {
         new_head->next = head;
         head = new_head;
 
-        st7789_draw_rect(head->x * 10, head->y * 10, 10, 10, COLOR_GREEN);
+        // Draw new head with canvas offsets
+        st7789_draw_rect((head->x * 10) + 10, (head->y * 10) + 30, 10, 10, COLOR_GREEN);
 
         if (next_x == apple_x && next_y == apple_y) {
             score++;
             custom_itoa(score, buf);
-            st7789_draw_string(150, 6, "Score:    ", COLOR_WHITE, COLOR_GRAY);
-            st7789_draw_string(206, 6, buf, COLOR_YELLOW, COLOR_GRAY);
+            
+            // Update Status Bar Score
+            st7789_draw_string(10, 295, "Score:      ", WIN_TEXT, WIN_FACE);
+            st7789_draw_string(66, 295, buf, WIN_TEXT, WIN_FACE);
 
             int valid_apple = 0;
             while (!valid_apple) {
-                apple_x = (custom_rand() % 22) + 1;
-                apple_y = (custom_rand() % 28) + 3;
+                apple_x = custom_rand() % 22;
+                apple_y = custom_rand() % 26;
                 valid_apple = 1;
                 SnakeNode_t *c = head;
                 while (c != (void*)0) {
@@ -888,13 +990,14 @@ void st7789_run_snake() {
                     c = c->next;
                 }
             }
-            st7789_draw_rect(apple_x * 10, apple_y * 10, 10, 10, COLOR_RED);
+            st7789_draw_rect((apple_x * 10) + 10, (apple_y * 10) + 30, 10, 10, COLOR_RED);
         } else {
             SnakeNode_t *curr = head;
             while (curr->next != (void*)0 && curr->next->next != (void*)0) {
                 curr = curr->next;
             }
-            st7789_draw_rect(curr->next->x * 10, curr->next->y * 10, 10, 10, COLOR_BLACK);
+            // Erase tail with canvas offsets
+            st7789_draw_rect((curr->next->x * 10) + 10, (curr->next->y * 10) + 30, 10, 10, COLOR_BLACK);
             custom_free(curr->next);
             curr->next = (void*)0;
         }
@@ -902,14 +1005,269 @@ void st7789_run_snake() {
         delay_us(80000); 
     }
 }
-void st7789_run_block_breaker() {
-    st7789_fill_screen(COLOR_BLACK);
+
+void st7789_run_custom_block_breaker(unsigned char custom_layout[5][8]) {
+    // 1. Draw the Desktop and the main App Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "Brick.exe");
+
+    // Draw Sunken Black Game Canvas
+    st7789_draw_rect(13, 28, 214, 236, WIN_SHADOW); 
+    st7789_draw_rect(14, 29, 212, 234, COLOR_BLACK); 
+
+    unsigned char blocks[5][8];
+    unsigned short colors[5] = {COLOR_RED, COLOR_YELLOW, COLOR_GREEN, COLOR_CYAN, COLOR_MAGENTA};
     
-    // Draw the Top UI Bar
-    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
-    st7789_draw_string(5, 6, "['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
-    st7789_draw_string(95, 6, "Blk: 40", COLOR_WHITE, COLOR_GRAY);
-    st7789_draw_string(165, 6, "Pts: 0", COLOR_WHITE, COLOR_GRAY);
+    int blocks_left = 0; 
+    int game_state = 0;   
+    int score = 0;
+    int show_pop_up = 0;
+    char ui_buf[10];
+
+    // Load custom layout with BIG blocks
+    for (int r = 0; r < 5; r++) {
+        for (int c = 0; c < 8; c++) {
+            blocks[r][c] = custom_layout[r][c];
+            if (blocks[r][c] == 1) {
+                blocks_left++;
+                int bx = c * 25 + 20; // Expanded X spacing
+                int by = r * 20 + 40; // Expanded Y spacing
+                st7789_draw_rect(bx, by, 23, 17, colors[r]); // Chunky 23x17 blocks
+            }
+        }
+    }
+
+    // --- PERFECTLY SPACED STATUS BAR INITIALIZATION ---
+    st7789_draw_string(15, 290, "Blk:", WIN_TEXT, WIN_FACE);
+    custom_itoa(blocks_left, ui_buf);
+    st7789_draw_string(50, 290, ui_buf, WIN_TEXT, WIN_FACE);
+    
+    st7789_draw_string(85, 290, "Pts:", WIN_TEXT, WIN_FACE); 
+    st7789_draw_string(120, 290, "0", WIN_TEXT, WIN_FACE); // Zero is safe!
+
+    int ball_x = 120, ball_y = 150;
+    int ball_dx = 4, ball_dy = -4; 
+    
+    int paddle_w = 46, paddle_h = 6;
+    int paddle_x = 97, paddle_y = 245; 
+
+    st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
+
+    while (1) {
+        int old_paddle_x = paddle_x;
+
+        if (uart_has_char()) {
+            char in = uart_getchar();
+            if (in == 'q') return; 
+            if (game_state == 0) {
+                if (in == 'a') { paddle_x -= 15; if (paddle_x < 15) paddle_x = 15; }
+                if (in == 'd') { paddle_x += 15; if (paddle_x > 224 - paddle_w) paddle_x = 224 - paddle_w; }
+            }
+        }
+
+        if (game_state != 0) {
+            if (show_pop_up == 0) {
+                draw_win2k_window(45, 115, 150, 70, "Info");
+                if (game_state == 1) st7789_draw_string(75, 142, "GAME OVER!", WIN_TEXT, WIN_FACE);
+                else if (game_state == 2) st7789_draw_string(85, 142, "YOU WIN!", WIN_TEXT, WIN_FACE);
+                show_pop_up = 1;
+            }
+            delay_us(100000); 
+            continue; 
+        }
+
+        st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_BLACK);
+        if (old_paddle_x != paddle_x) st7789_draw_rect(old_paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLACK);
+
+        ball_x += ball_dx; ball_y += ball_dy;
+
+        if (ball_x <= 14) { ball_x = 14; ball_dx = -ball_dx; }
+        if (ball_x >= 222) { ball_x = 222; ball_dx = -ball_dx; }
+        if (ball_y <= 29) { ball_y = 29; ball_dy = -ball_dy; } 
+        if (ball_y >= 260) { game_state = 1; continue; }
+
+        if (ball_y + 4 >= paddle_y && ball_y <= paddle_y + paddle_h && ball_x + 4 >= paddle_x && ball_x <= paddle_x + paddle_w) {
+            ball_dy = -ball_dy; ball_y = paddle_y - 4; 
+        }
+
+        int hit = 0;
+        for (int r = 0; r < 5 && !hit; r++) {
+            for (int c = 0; c < 8 && !hit; c++) {
+                if (blocks[r][c]) {
+                    // Match the bigger box collision math
+                    int bx = c * 25 + 20; 
+                    int by = r * 20 + 40;
+                    
+                    if (ball_x + 4 >= bx && ball_x <= bx + 23 && ball_y + 4 >= by && ball_y <= by + 17) {
+                        blocks[r][c] = 0; 
+                        st7789_draw_rect(bx, by, 23, 17, COLOR_BLACK); 
+                        ball_dy = -ball_dy; hit = 1;
+                        
+                        blocks_left--; score += 100;
+                        
+                        // --- PERFECTLY SPACED STATUS BAR UPDATES ---
+                        custom_itoa(blocks_left, ui_buf);
+                        st7789_draw_string(50, 290, "   ", WIN_TEXT, WIN_FACE); 
+                        st7789_draw_string(50, 290, ui_buf, WIN_TEXT, WIN_FACE);
+                        
+                        custom_itoa(score, ui_buf);
+                        st7789_draw_string(120, 290, "      ", WIN_TEXT, WIN_FACE); 
+                        st7789_draw_string(120, 290, ui_buf, WIN_TEXT, WIN_FACE);
+                        
+                        if (blocks_left == 0) game_state = 2;
+                    }
+                }
+            }
+        }
+        st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_WHITE);
+        st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
+        delay_us(30000); 
+    }
+}
+void st7789_run_block_studio() {
+    // 1. Draw Win2K Level Editor UI
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "BrickStudio.exe");
+    
+    // Status Bar Commands
+    st7789_draw_string(15, 290, "e:Draw p:Play q:Quit", WIN_TEXT, WIN_FACE);
+
+    // Draw Sunken Black Canvas
+    st7789_draw_rect(13, 28, 214, 236, WIN_SHADOW); 
+    st7789_draw_rect(14, 29, 212, 234, COLOR_BLACK); 
+
+    unsigned char custom_blocks[5][8]; 
+    // Safely zero-out the grid
+    for(int r = 0; r < 5; r++) {
+        for(int c = 0; c < 8; c++) {
+            custom_blocks[r][c] = 0;
+        }
+    }
+    
+    unsigned short colors[5] = {COLOR_RED, COLOR_YELLOW, COLOR_GREEN, COLOR_CYAN, COLOR_MAGENTA};
+
+    int cursor_r = 0;
+    int cursor_c = 0;
+    int cursor_state = 0;
+    unsigned int last_blink = get_ccount();
+
+    while(1) {
+        // --- HOLLOW CURSOR MATH FOR 23x17 BLOCKS ---
+        if (get_ccount() - last_blink > 15000000) {
+            cursor_state = !cursor_state;
+            last_blink = get_ccount();
+            
+            int bx = cursor_c * 25 + 20; 
+            int by = cursor_r * 20 + 40;
+            
+            if (cursor_state) {
+                st7789_draw_rect(bx - 1, by - 1, 25, 1, COLOR_WHITE);  
+                st7789_draw_rect(bx - 1, by + 17, 25, 1, COLOR_WHITE); 
+                st7789_draw_rect(bx - 1, by, 1, 17, COLOR_WHITE);      
+                st7789_draw_rect(bx + 23, by, 1, 17, COLOR_WHITE);     
+            } else {
+                st7789_draw_rect(bx - 1, by - 1, 25, 1, COLOR_BLACK);  
+                st7789_draw_rect(bx - 1, by + 17, 25, 1, COLOR_BLACK); 
+                st7789_draw_rect(bx - 1, by, 1, 17, COLOR_BLACK);      
+                st7789_draw_rect(bx + 23, by, 1, 17, COLOR_BLACK);     
+            }
+        }
+
+        if (uart_has_char()) {
+            char in = uart_getchar();
+            
+            // Erase old cursor frame before moving
+            int bx = cursor_c * 25 + 20; 
+            int by = cursor_r * 20 + 40;
+            st7789_draw_rect(bx - 1, by - 1, 25, 1, COLOR_BLACK); 
+            st7789_draw_rect(bx - 1, by + 17, 25, 1, COLOR_BLACK);
+            st7789_draw_rect(bx - 1, by, 1, 17, COLOR_BLACK);
+            st7789_draw_rect(bx + 23, by, 1, 17, COLOR_BLACK);
+            
+            if (in == 'q') return; // Exit back to Games Menu
+
+            // Movement Bounds
+            if (in == 'w' && cursor_r > 0) cursor_r--;
+            if (in == 's' && cursor_r < 4) cursor_r++;
+            if (in == 'a' && cursor_c > 0) cursor_c--;
+            if (in == 'd' && cursor_c < 7) cursor_c++;
+
+            // Toggle Block (Draw / Erase)
+            if (in == 'e') {
+                custom_blocks[cursor_r][cursor_c] = !custom_blocks[cursor_r][cursor_c];
+                
+                bx = cursor_c * 25 + 20; 
+                by = cursor_r * 20 + 40;
+                
+                if (custom_blocks[cursor_r][cursor_c]) {
+                    st7789_draw_rect(bx, by, 23, 17, colors[cursor_r]); 
+                } else {
+                    st7789_draw_rect(bx, by, 23, 17, COLOR_BLACK); 
+                }
+            }
+
+            // --- THE NEW EMPTY-LEVEL EXCEPTION LOGIC ---
+            if (in == 'p') {
+                int total_blocks = 0;
+                
+                // Count how many blocks the user has drawn
+                for (int r = 0; r < 5; r++) {
+                    for (int c = 0; c < 8; c++) {
+                        if (custom_blocks[r][c]) total_blocks++;
+                    }
+                }
+
+                if (total_blocks == 0) {
+                    // Trigger Win2K Error Pop-up
+                    draw_win2k_window(45, 115, 150, 70, "Warning");
+                    st7789_draw_string(75, 142, "ADD BLOCKS!", WIN_TEXT, WIN_FACE);
+                    
+                    // Wait safely for the user to press ANY key to dismiss the pop-up
+                    while (1) {
+                        if (uart_has_char()) {
+                            uart_getchar(); // Consume the keypress
+                            break;
+                        }
+                    }
+                } else {
+                    // Valid Level -> Pass array directly into the game!
+                    st7789_run_custom_block_breaker(custom_blocks);
+                }
+                
+                // Whether we returned from playing a game, or just dismissed the warning popup:
+                // Redraw the entire Studio UI to wipe the screen clean!
+                st7789_fill_screen(WIN_DESKTOP);
+                draw_win2k_window(5, 5, 230, 310, "BrickStudio.exe");
+                st7789_draw_string(15, 290, "e:Draw p:Play q:Quit", WIN_TEXT, WIN_FACE);
+                st7789_draw_rect(13, 28, 214, 236, WIN_SHADOW); 
+                st7789_draw_rect(14, 29, 212, 234, COLOR_BLACK); 
+                
+                // Redraw our custom blocks exactly where we left them
+                for (int r = 0; r < 5; r++) {
+                    for (int c = 0; c < 8; c++) {
+                        if (custom_blocks[r][c]) {
+                            st7789_draw_rect(c * 25 + 20, r * 20 + 40, 23, 17, colors[r]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void st7789_run_block_breaker() {
+    // 1. Draw the Desktop and the main App Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "Brick.exe");
+
+    // 2. Status Bar at the bottom for Score and Info
+    st7789_draw_string(15, 290, "Blk:40", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(85, 290, "Pts:0", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(160, 290, "['q'=Quit]", WIN_TEXT, WIN_FACE);
+
+    // 3. Draw Sunken Black Game Canvas (212 wide x 234 tall, starting at X: 14, Y: 29)
+    st7789_draw_rect(13, 28, 214, 236, WIN_SHADOW); 
+    st7789_draw_rect(14, 29, 212, 234, COLOR_BLACK); 
 
     unsigned char blocks[5][8];
     unsigned short colors[5] = {COLOR_RED, COLOR_YELLOW, COLOR_GREEN, COLOR_CYAN, COLOR_MAGENTA};
@@ -917,22 +1275,24 @@ void st7789_run_block_breaker() {
     int blocks_left = 40; 
     int game_state = 0;   
     int score = 0;
+    int show_pop_up = 0;
     char ui_buf[10];
 
+    // Initialize and draw blocks inside the new canvas coordinates (Offset X by 18, Y by 35)
     for (int r = 0; r < 5; r++) {
         for (int c = 0; c < 8; c++) {
             blocks[r][c] = 1;
-            int bx = c * 30 + 1;
-            int by = r * 15 + 30;
-            st7789_draw_rect(bx, by, 28, 13, colors[r]);
+            int bx = c * 24 + 18; 
+            int by = r * 12 + 35;
+            st7789_draw_rect(bx, by, 22, 10, colors[r]);
         }
     }
 
-    int ball_x = 120, ball_y = 200;
-    int ball_dx = 5, ball_dy = -5; 
+    int ball_x = 120, ball_y = 150;
+    int ball_dx = 4, ball_dy = -4; 
     
-    int paddle_w = 50, paddle_h = 6;
-    int paddle_x = 95, paddle_y = 300;
+    int paddle_w = 46, paddle_h = 6;
+    int paddle_x = 97, paddle_y = 245; // Positioned safely inside the 234px tall canvas
 
     st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
 
@@ -945,78 +1305,89 @@ void st7789_run_block_breaker() {
             
             if (game_state == 0) {
                 if (in == 'a') {
-                    paddle_x -= 20;
-                    if (paddle_x < 0) paddle_x = 0; 
+                    paddle_x -= 15;
+                    if (paddle_x < 15) paddle_x = 15; // Bound to left canvas wall
                 }
                 if (in == 'd') {
-                    paddle_x += 20;
-                    if (paddle_x > 240 - paddle_w) paddle_x = 240 - paddle_w; 
+                    paddle_x += 15;
+                    if (paddle_x > 224 - paddle_w) paddle_x = 224 - paddle_w; // Bound to right canvas wall
                 }
             }
         }
 
         if (game_state != 0) {
-            if (game_state == 1) {
-                st7789_draw_string(75, 160, "GAME OVER", COLOR_RED, COLOR_BLACK);
-            } else if (game_state == 2) {
-                st7789_draw_string(80, 160, "YOU WIN!", COLOR_GREEN, COLOR_BLACK);
+            // Draw Win2K pop-up dialog box once upon end state
+            if (show_pop_up == 0) {
+                draw_win2k_window(45, 115, 150, 70, "Info");
+                if (game_state == 1) {
+                    st7789_draw_string(75, 142, "GAME OVER!", WIN_TEXT, WIN_FACE);
+                } else if (game_state == 2) {
+                    st7789_draw_string(85, 142, "YOU WIN!", WIN_TEXT, WIN_FACE);
+                }
+                show_pop_up = 1;
             }
             delay_us(100000); 
             continue; 
         }
 
+        // Erase old ball
         st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_BLACK);
 
         if (old_paddle_x != paddle_x) {
+            // Erase old paddle
             st7789_draw_rect(old_paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLACK);
         }
 
         ball_x += ball_dx;
         ball_y += ball_dy;
 
-        if (ball_x <= 0) { ball_x = 0; ball_dx = -ball_dx; }
-        if (ball_x >= 236) { ball_x = 236; ball_dx = -ball_dx; }
-        if (ball_y <= 20) { ball_y = 20; ball_dy = -ball_dy; } // Bounces safely below the UI bar
+        // Canvas Wall Collisions (Left: 14, Right: 226, Top: 29)
+        if (ball_x <= 14) { ball_x = 14; ball_dx = -ball_dx; }
+        if (ball_x >= 222) { ball_x = 222; ball_dx = -ball_dx; }
+        if (ball_y <= 29) { ball_y = 29; ball_dy = -ball_dy; } 
 
-        if (ball_y >= 316) {
+        // Bottom canvas boundary = Game Over
+        if (ball_y >= 260) {
             game_state = 1; 
             continue;
         }
 
+        // Paddle Collision
         if (ball_y + 4 >= paddle_y && ball_y <= paddle_y + paddle_h && 
             ball_x + 4 >= paddle_x && ball_x <= paddle_x + paddle_w) {
             ball_dy = -ball_dy;
             ball_y = paddle_y - 4; 
         }
 
+        // Block Collision Loop
         int hit = 0;
         for (int r = 0; r < 5 && !hit; r++) {
             for (int c = 0; c < 8 && !hit; c++) {
                 if (blocks[r][c]) {
-                    int bx = c * 30 + 1;
-                    int by = r * 15 + 30;
+                    int bx = c * 24 + 18;
+                    int by = r * 12 + 35;
                     
-                    if (ball_x + 4 >= bx && ball_x <= bx + 28 && 
-                        ball_y + 4 >= by && ball_y <= by + 13) {
+                    if (ball_x + 4 >= bx && ball_x <= bx + 22 && 
+                        ball_y + 4 >= by && ball_y <= by + 10) {
                         
                         blocks[r][c] = 0; 
-                        st7789_draw_rect(bx, by, 28, 13, COLOR_BLACK); 
+                        st7789_draw_rect(bx, by, 22, 10, COLOR_BLACK); 
                         ball_dy = -ball_dy; 
                         hit = 1;
                         
-                        // --- UI UPDATE LOGIC ---
+                        // --- UI STATUS BAR UPDATE ---
                         blocks_left--;
                         score += 100;
                         
-                        // Update Blocks Left Counter (starts at x=135)
+                        // Update Blocks Left Counter (at X: 55)
                         custom_itoa(blocks_left, ui_buf);
-                        st7789_draw_string(135, 6, "  ", COLOR_WHITE, COLOR_GRAY); // Erase old numbers
-                        st7789_draw_string(135, 6, ui_buf, COLOR_WHITE, COLOR_GRAY);
+                        st7789_draw_string(55, 290, "   ", WIN_TEXT, WIN_FACE); 
+                        st7789_draw_string(55, 290, ui_buf, WIN_TEXT, WIN_FACE);
                         
-                        // Update Score Counter (starts at x=205)
+                        // Update Score Counter (at X: 120)
                         custom_itoa(score, ui_buf);
-                        st7789_draw_string(205, 6, "    ", COLOR_WHITE, COLOR_GRAY); // Erase old numbers
-                        st7789_draw_string(205, 6, ui_buf, COLOR_WHITE, COLOR_GRAY);
+                        st7789_draw_string(120, 290, "     ", WIN_TEXT, WIN_FACE); 
+                        st7789_draw_string(120, 290, ui_buf, WIN_TEXT, WIN_FACE);
                         
                         if (blocks_left == 0) game_state = 2;
                     }
@@ -1024,29 +1395,62 @@ void st7789_run_block_breaker() {
             }
         }
 
+        // Draw new ball and paddle positions
         st7789_draw_rect(ball_x, ball_y, 4, 4, COLOR_WHITE);
         st7789_draw_rect(paddle_x, paddle_y, paddle_w, paddle_h, COLOR_BLUE);
 
-        delay_us(33000); 
+        delay_us(30000); 
     }
 }
 
+// Bare-metal time formatter: Converts raw seconds into an "HH:MM:SS" string
+void custom_format_time(unsigned int total_seconds, char* out_buf) {
+    unsigned int h = total_seconds / 3600;
+    unsigned int m = (total_seconds % 3600) / 60;
+    unsigned int s = total_seconds % 60;
+
+    // Cap at 99 hours to prevent buffer overflow
+    if (h > 99) h = 99; 
+
+    // Manually build the ASCII string with leading zeros
+    out_buf[0] = '0' + (h / 10);
+    out_buf[1] = '0' + (h % 10);
+    out_buf[2] = ':';
+    out_buf[3] = '0' + (m / 10);
+    out_buf[4] = '0' + (m % 10);
+    out_buf[5] = ':';
+    out_buf[6] = '0' + (s / 10);
+    out_buf[7] = '0' + (s % 10);
+    out_buf[8] = '\0'; // Null terminator
+}
+
+
 
 void st7789_run_sys_monitor() {
-    st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 20, COLOR_BLUE);
-    st7789_draw_string(5, 6, "SYS MONITOR ['q' = Exit]", COLOR_WHITE, COLOR_BLUE);
+    // 1. Draw the Desktop and the main App Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(5, 5, 230, 310, "Taskmgr.exe");
 
-    st7789_draw_string(10, 30, "Clock: 40MHz XTAL", COLOR_CYAN, COLOR_BLACK);
-    st7789_draw_string(10, 45, "SRAM:  32768 Bytes Total", COLOR_CYAN, COLOR_BLACK);
+    // 2. Static System Information Text
+    st7789_draw_string(15, 30, "Clock: 40MHz XTAL", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(15, 45, "SRAM:  32768 Bytes", WIN_TEXT, WIN_FACE);
 
-    st7789_draw_string(10, 110, "CPU Load %", COLOR_GRAY, COLOR_BLACK);
-    st7789_draw_rect(10, 124, 202, 52, COLOR_WHITE);
-    st7789_draw_rect(11, 125, 200, 50, COLOR_BLACK);
+    st7789_draw_string(15, 65, "Used:", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(115, 65, "Up:", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(15, 80, "CPU Load:", WIN_TEXT, WIN_FACE);
 
-    st7789_draw_string(10, 190, "SRAM Usage", COLOR_GRAY, COLOR_BLACK);
-    st7789_draw_rect(10, 204, 202, 52, COLOR_WHITE);
-    st7789_draw_rect(11, 205, 200, 50, COLOR_BLACK);
+    // 3. CPU Graph UI (Sunken Canvas)
+    st7789_draw_string(15, 100, "CPU Usage History", WIN_TEXT, WIN_FACE);
+    st7789_draw_rect(14, 114, 202, 52, WIN_SHADOW);   
+    st7789_draw_rect(15, 115, 200, 50, COLOR_BLACK);  
+
+    // 4. Memory Graph UI (Sunken Canvas)
+    st7789_draw_string(15, 180, "Memory Usage History", WIN_TEXT, WIN_FACE);
+    st7789_draw_rect(14, 194, 202, 52, WIN_SHADOW);   
+    st7789_draw_rect(15, 195, 200, 50, COLOR_BLACK);  
+
+    // 5. Status Bar
+    st7789_draw_string(15, 290, "['q' = Exit Taskmgr]", WIN_TEXT, WIN_FACE);
 
     unsigned char cpu_hist[200];
     unsigned short sram_hist[200];
@@ -1062,17 +1466,19 @@ void st7789_run_sys_monitor() {
         unsigned int free_m = get_free_heap();
         unsigned int used_m = HEAP_SIZE - free_m;
 
-        st7789_draw_string(10, 65, "Used: ", COLOR_YELLOW, COLOR_BLACK);
+        // Dynamic Text: Used RAM
         custom_itoa(used_m, buf);
-        st7789_draw_string(60, 65, "      ", COLOR_BLACK, COLOR_BLACK);
-        st7789_draw_string(60, 65, buf, COLOR_WHITE, COLOR_BLACK);
+        st7789_draw_string(55, 65, "      ", WIN_TEXT, WIN_FACE); 
+        st7789_draw_string(55, 65, buf, WIN_TEXT, WIN_FACE);
 
+        // Dynamic Text: Uptime
+        // Dynamic Text: Uptime (Formatted as HH:MM:SS)
         update_uptime();
+        custom_format_time(global_uptime_sec, buf); // Use our new formatter!
         
-        st7789_draw_string(120, 65, "Up: ", COLOR_MAGENTA, COLOR_BLACK);
-        custom_itoa(global_uptime_sec, buf);
-        st7789_draw_string(150, 65, "      ", COLOR_BLACK, COLOR_BLACK);
-        st7789_draw_string(150, 65, buf, COLOR_WHITE, COLOR_BLACK);
+        // Use 8 spaces to cleanly erase the 8-character "HH:MM:SS" string
+        st7789_draw_string(140, 65, "        ", WIN_TEXT, WIN_FACE); 
+        st7789_draw_string(140, 65, buf, WIN_TEXT, WIN_FACE);
 
         if (uart_has_char()) {
             if (uart_getchar() == 'q') return;
@@ -1084,12 +1490,20 @@ void st7789_run_sys_monitor() {
         unsigned int tot = act + idle;
         unsigned int cpu = (act * 100) / tot;
 
-        st7789_draw_string(10, 80, "CPU:  ", COLOR_RED, COLOR_BLACK);
+        // Dynamic Text: CPU %
         custom_itoa(cpu, buf);
-        st7789_draw_string(60, 80, "    ", COLOR_BLACK, COLOR_BLACK);
-        st7789_draw_string(60, 80, buf, COLOR_WHITE, COLOR_BLACK);
-        st7789_draw_string(85, 80, "%", COLOR_WHITE, COLOR_BLACK);
+        
+        // Dynamically append the '%' sign directly to the end of the number string
+        int i = 0;
+        while(buf[i] != '\0') {
+            i++;
+        }
+        buf[i] = '%';
+        buf[i+1] = '\0';
 
+        st7789_draw_string(85, 80, "    ", WIN_TEXT, WIN_FACE); // Erase old value cleanly
+        st7789_draw_string(85, 80, buf, WIN_TEXT, WIN_FACE);    // Draw "7%" or "100%" natively
+        // Shift History Buffers
         for (int i = 0; i < 199; i++) {
             cpu_hist[i] = cpu_hist[i + 1];
             sram_hist[i] = sram_hist[i + 1];
@@ -1097,18 +1511,26 @@ void st7789_run_sys_monitor() {
         cpu_hist[199] = (cpu > 100) ? 100 : cpu;
         sram_hist[199] = used_m;
 
+        // --- NEW LINE GRAPH RENDERING ---
         for (int i = 0; i < 200; i++) {
             unsigned int c_h = (cpu_hist[i] * 50) / 100;
             unsigned int s_h = (sram_hist[i] * 50) / HEAP_SIZE;
 
-            st7789_draw_vline(11 + i, 125, 50, COLOR_BLACK);
-            if (c_h > 0) st7789_draw_vline(11 + i, 125 + (50 - c_h), c_h, COLOR_RED);
+            // Bounds check so the pixels don't draw outside the canvas
+            if (c_h >= 50) c_h = 49;
+            if (s_h >= 50) s_h = 49;
 
-            st7789_draw_vline(11 + i, 205, 50, COLOR_BLACK);
-            if (s_h > 0) st7789_draw_vline(11 + i, 205 + (50 - s_h), s_h, COLOR_GREEN);
+            // CPU Line Graph (Base Y: 115)
+            st7789_draw_vline(15 + i, 115, 50, COLOR_BLACK); // Wipe column
+            // Draw a 2-pixel tall dot exactly at the peak height
+            st7789_draw_vline(15 + i, 115 + (48 - c_h), 2, COLOR_GREEN); 
+
+            // Memory Line Graph (Base Y: 195)
+            st7789_draw_vline(15 + i, 195, 50, COLOR_BLACK); // Wipe column
+            // Draw a 2-pixel tall dot exactly at the peak height
+            st7789_draw_vline(15 + i, 195 + (48 - s_h), 2, COLOR_YELLOW);
         }
-
-        delay_us(100000);
+        delay_us(100000); 
     }
 }
 
@@ -1149,41 +1571,51 @@ void tetris_draw_piece(int piece, int rot, int px, int py, unsigned short color)
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (mask & (1 << (15 - (r * 4 + c)))) {
-                int bx = px + c;
-                int by = py + r;
+                
+                int bx = px + c; // Pure Grid X (0 to 9)
+                int by = py + r; // Pure Grid Y (0 to 19)
+                
                 if (by >= 0) { // Only draw if inside the board
-                    st7789_draw_rect(70 + bx * 10, 60 + by * 10, 9, 9, color);
+                    // Convert grid to pixels right as we draw!
+                    // X starts at 20, Y starts at 60
+                    st7789_draw_rect(20 + (bx * 10), 60 + (by * 10), 9, 9, color);
                 }
             }
         }
     }
 }
 
-// Helper: Draws the "Next" piece in the UI area on the right
+// Helper: Draws the "Next" piece centered in the UI preview box on the right
 void tetris_draw_next_piece(int piece, unsigned short color) {
     unsigned short mask = tetris_pieces[piece][0]; // Always show default rotation
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++) {
             if (mask & (1 << (15 - (r * 4 + c)))) {
-                st7789_draw_rect(180 + c * 10, 75 + r * 10, 9, 9, color);
+                // Added a +6 pixel shift to center the shape inside the 54x54 preview box
+                st7789_draw_rect(150 + 6 + (c * 10), 85 + (r * 10), 9, 9, color);
             }
         }
     }
 }
 
 void st7789_run_tetris() {
-    st7789_fill_screen(COLOR_BLACK);
-    st7789_draw_rect(0, 0, 240, 20, COLOR_GRAY);
-    st7789_draw_string(5, 6, "TETRIS ['q'=Quit]", COLOR_YELLOW, COLOR_GRAY);
+    // 1. Draw the Desktop and the main App Window
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(10, 10, 220, 300, "Tetris.exe");
 
-    // Draw Board Borders (10x20 grid, 10px per block -> 100x200 total size)
-    st7789_draw_rect(68, 58, 104, 204, COLOR_WHITE); // Outer border
-    st7789_draw_rect(70, 60, 100, 200, COLOR_BLACK); // Inner playfield
+    // 2. Status Bar at the bottom
+    st7789_draw_string(20, 285, "Score: 0", WIN_TEXT, WIN_FACE);
+    st7789_draw_string(135, 285, "['q'=Quit]", WIN_TEXT, WIN_FACE);
 
-    // Draw Right Side UI (spaced out safely to avoid bounding box collisions)
-    st7789_draw_string(180, 60, "NEXT:", COLOR_WHITE, COLOR_BLACK);
-    st7789_draw_string(175, 145, "SCORE:", COLOR_WHITE, COLOR_BLACK);
-    st7789_draw_string(175, 160, "0", COLOR_YELLOW, COLOR_BLACK);
+    // 3. Draw Board 3D Borders (Shifted Left to X: 20)
+    st7789_draw_rect(18, 58, 104, 204, WIN_SHADOW);  // Sunken outer bevel
+    st7789_draw_rect(19, 59, 102, 202, WIN_HILITE);  // Sunken inner bevel
+    st7789_draw_rect(20, 60, 100, 200, COLOR_BLACK); // Inner playfield
+
+    // 4. Draw Right Side UI (Centered nicely in the new empty space)
+    st7789_draw_string(158, 58, "NEXT", WIN_TEXT, WIN_FACE);
+    st7789_draw_rect(148, 78, 54, 54, WIN_SHADOW); 
+    st7789_draw_rect(149, 79, 52, 52, COLOR_BLACK);
     
     unsigned short board[20][10];
     for (int r = 0; r < 20; r++)
@@ -1193,18 +1625,17 @@ void st7789_run_tetris() {
     if (prng_state == 0) prng_state = get_ccount();
 
     int cur_p = custom_rand() % 7;
-    int next_p = custom_rand() % 7; // Initialize next piece preview
+    int next_p = custom_rand() % 7; 
     int cur_r = 0;
-    int cur_x = 3, cur_y = -3; // Spawn slightly above the board
+    int cur_x = 3, cur_y = -3; 
     
     int gravity_timer = 0;
     int game_over = 0;
+    int show_game_over = 0; 
     
-    // UI Variables
     int score = 0;
     char score_buf[10];
 
-    // Draw the very first next piece preview
     tetris_draw_next_piece(next_p, tetris_colors[next_p]);
 
     while (1) {
@@ -1213,12 +1644,12 @@ void st7789_run_tetris() {
             if (in == 'q') return;
 
             if (!game_over) {
-                tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); // Erase old
+                tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); 
 
                 if (in == 'a' && !tetris_check_collision(board, cur_p, cur_r, cur_x - 1, cur_y)) cur_x--;
                 if (in == 'd' && !tetris_check_collision(board, cur_p, cur_r, cur_x + 1, cur_y)) cur_x++;
-                if (in == 's' && !tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y + 1)) cur_y++; // Soft drop
-                if (in == 'w') { // Rotate
+                if (in == 's' && !tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y + 1)) cur_y++; 
+                if (in == 'w') { 
                     int new_r = (cur_r + 1) % 4;
                     if (!tetris_check_collision(board, cur_p, new_r, cur_x, cur_y)) {
                         cur_r = new_r;
@@ -1228,37 +1659,39 @@ void st7789_run_tetris() {
         }
 
         if (game_over) {
-            st7789_draw_string(85, 150, "GAME OVER", COLOR_RED, COLOR_BLACK);
+            if (show_game_over == 0) {
+                draw_win2k_window(45, 120, 150, 60, "Info");
+                st7789_draw_string(80, 145, "GAME OVER!", WIN_TEXT, WIN_FACE);
+                show_game_over = 1;
+            }
             delay_us(100000);
             continue;
         }
 
-        // Apply Gravity every ~500ms
         gravity_timer++;
         if (gravity_timer >= 15) { 
             gravity_timer = 0;
-            tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); // Erase old
+            tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, COLOR_BLACK); 
 
             if (!tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y + 1)) {
                 cur_y++;
             } else {
-                // LOCK PIECE INTO BOARD
                 unsigned short mask = tetris_pieces[cur_p][cur_r];
                 for (int r = 0; r < 4; r++) {
                     for (int c = 0; c < 4; c++) {
                         if (mask & (1 << (15 - (r * 4 + c)))) {
                             int bx = cur_x + c;
                             int by = cur_y + r;
-                            if (by < 0) game_over = 1; // Locked above screen = death
+                            if (by < 0) game_over = 1; 
                             else {
                                 board[by][bx] = tetris_colors[cur_p];
-                                st7789_draw_rect(70 + bx * 10, 60 + by * 10, 9, 9, tetris_colors[cur_p]);
+                                // Shifted block drawing to X: 20
+                                st7789_draw_rect(20 + bx * 10, 60 + by * 10, 9, 9, tetris_colors[cur_p]);
                             }
                         }
                     }
                 }
 
-                // 2. LINE CLEAR CHECK
                 int redraw_board = 0;
                 int lines_cleared_this_turn = 0;
 
@@ -1273,18 +1706,15 @@ void st7789_run_tetris() {
                     
                     if (full) {
                         lines_cleared_this_turn++;
-                        
-                        // Shift all rows down above this row
                         for (int sr = r; sr > 0; sr--) {
                             for (int c = 0; c < 10; c++) {
                                 board[sr][c] = board[sr - 1][c];
                             }
                         }
-                        // Clear the absolute top row
                         for (int c = 0; c < 10; c++) {
                             board[0][c] = 0;
                         }
-                        r++; // Re-check the same row index since everything dropped down
+                        r++; 
                     }
                 }
 
@@ -1292,87 +1722,51 @@ void st7789_run_tetris() {
                     redraw_board = 1;
                     score += (lines_cleared_this_turn * 100);
                     
-                    // Convert score and cleanly draw it using differential spacing
                     custom_itoa(score, score_buf);
-                    st7789_draw_string(175, 160, "      ", COLOR_BLACK, COLOR_BLACK); // Clear old score area
-                    st7789_draw_string(175, 160, score_buf, COLOR_YELLOW, COLOR_BLACK); // Draw new score
+                    st7789_draw_string(20, 285, "Score:       ", WIN_TEXT, WIN_FACE); 
+                    st7789_draw_string(76, 285, score_buf, WIN_TEXT, WIN_FACE); 
                 }
 
                 if (redraw_board) {
-                    st7789_draw_rect(70, 60, 100, 200, COLOR_BLACK);
+                    // Shifted board wipe to X: 20
+                    st7789_draw_rect(20, 60, 100, 200, COLOR_BLACK);
                     for (int r = 0; r < 20; r++) {
                         for (int c = 0; c < 10; c++) {
                             if (board[r][c]) {
-                                st7789_draw_rect(70 + c * 10, 60 + r * 10, 9, 9, board[r][c]);
+                                // Shifted redraw to X: 20
+                                st7789_draw_rect(20 + c * 10, 60 + r * 10, 9, 9, board[r][c]);
                             }
                         }
                     }
                 }
 
-                // SPAWN NEW PIECE & UPDATE NEXT PREVIEW
-                tetris_draw_next_piece(next_p, COLOR_BLACK); // Erase old preview block
+                tetris_draw_next_piece(next_p, COLOR_BLACK); 
                 
                 cur_p = next_p;
                 next_p = custom_rand() % 7;
                 cur_r = 0;
                 cur_x = 3; cur_y = -3;
                 
-                tetris_draw_next_piece(next_p, tetris_colors[next_p]); // Draw new preview block
+                tetris_draw_next_piece(next_p, tetris_colors[next_p]); 
 
                 if (tetris_check_collision(board, cur_p, cur_r, cur_x, cur_y)) game_over = 1;
             }
         }
 
-        // Draw current moving piece
         if (!game_over) {
             tetris_draw_piece(cur_p, cur_r, cur_x, cur_y, tetris_colors[cur_p]);
         }
 
-        delay_us(33000); // 30 FPS core loop
+        delay_us(33000); 
     }
 }
 
-void st7789_run_games_menu() {
-    int game_selection = 0;
-    int redraw = 1;
-    
-    while(1) {
-        if (redraw) {
-            st7789_fill_screen(COLOR_BLACK);
-            st7789_draw_rect(0, 0, 240, 30, COLOR_BLUE);
-            st7789_draw_string(10, 10, "GAMES MENU ['q'=Back]", COLOR_WHITE, COLOR_BLUE);
-
-            st7789_draw_string(40, 70, "1. Snake", 
-                game_selection == 0 ? COLOR_BLACK : COLOR_WHITE, 
-                game_selection == 0 ? COLOR_GREEN : COLOR_BLACK);
-                
-            st7789_draw_string(40, 100, "2. Block Breaker", 
-                game_selection == 1 ? COLOR_BLACK : COLOR_WHITE, 
-                game_selection == 1 ? COLOR_GREEN : COLOR_BLACK);
-                
-            st7789_draw_string(40, 130, "3. Tetris", 
-                game_selection == 2 ? COLOR_BLACK : COLOR_WHITE, 
-                game_selection == 2 ? COLOR_GREEN : COLOR_BLACK);
-                
-            redraw = 0;
-        }
-
-        if (uart_has_char()) {
-            char in = uart_getchar();
-            if (in == 'q') return; // Exit to main OS
-            if (in == 'w' && game_selection > 0) { game_selection--; redraw = 1; }
-            if (in == 's' && game_selection < 2) { game_selection++; redraw = 1; }
-            if (in == 'e') {
-                if (game_selection == 0) st7789_run_snake();
-                if (game_selection == 1) st7789_run_block_breaker();
-                if (game_selection == 2) st7789_run_tetris();
-                
-                redraw = 1; // Repaint menu when returning from game
-            }
-        }
-        delay_us(50000); 
-    }
-}
+const char *game_items[] = {
+    "Snake",
+    "Tetris",
+    "Block Breaker"
+};
+#define TOTAL_GAMES 3
 
 
 const char *menu_items[] = {
@@ -1397,7 +1791,7 @@ void st7789_draw_single_item(int index, int is_selected) {
     int y_pos = start_y + (index * 20);
     
     if (is_selected) {
-        // Draw blue highlight
+        // Draw blue highlight 
         st7789_draw_rect(start_x, y_pos - 2, 180, 16, WIN_TITLE);
         st7789_draw_string(start_x + 4, y_pos, menu_items[index], WIN_TEXT_SEL, WIN_TITLE);
     } else {
@@ -1407,90 +1801,386 @@ void st7789_draw_single_item(int index, int is_selected) {
     }
 }
 
+
+// ==========================================
+// 1. SNAKE ICON LAYERS (Green Body, White Eye, Red Tongue)
+// ==========================================
+const unsigned short SNAKE_BODY[16] = {
+    0x0000, 0x07E0, 0x0FF0, 0x1C38, 0x1818, 0x1818, 0x0C30, 0x07E0,
+    0x03C0, 0x0038, 0x0018, 0x1818, 0x1C38, 0x0FE0, 0x07C0, 0x0000
+};
+const unsigned short SNAKE_EYE[16] = {
+    0x0000, 0x0000, 0x0400, 0x0400, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short SNAKE_TONGUE[16] = {
+    0x0000, 0x0000, 0x0000, 0x0004, 0x000E, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+// ==========================================
+// 2. TETRIS ICON LAYERS (Cyan, Yellow, and Red Blocks)
+// ==========================================
+const unsigned short TETRIS_CYAN[16] = {
+    0x0000, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short TETRIS_YELLOW[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x00F0,
+    0x00F0, 0x00F0, 0x00F0, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short TETRIS_RED[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0xF000, 0xF000, 0x0000, 0x0000, 0x0000
+};
+
+// ==========================================
+// 3. BRICK STUDIO LAYERS (Yellow/Red Bricks, White Ball, Blue Paddle)
+// ==========================================
+const unsigned short BRICK_YELLOW[16] = {
+    0x0000, 0x7FFE, 0x7FFE, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+}; 
+const unsigned short BRICK_RED[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x3FFC, 0x3FFC, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+}; 
+const unsigned short BRICK_WHITE[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0180,
+    0x03C0, 0x03C0, 0x0180, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+}; 
+const unsigned short BRICK_BLUE[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x1FF8, 0x1FF8, 0x0000
+}; 
+
+
+// High-Speed Bitwise Renderer
+void st7789_draw_hex_icon(int x, int y, const unsigned short* icon, unsigned short color) {
+    for (int r = 0; r < 16; r++) {
+        unsigned short row = icon[r];
+        for (int c = 0; c < 16; c++) {
+            // Check if the specific bit is a 1
+            if (row & (1 << (15 - c))) {
+                st7789_draw_rect(x + c, y + r, 1, 1, color); // Light up the pixel!
+            }
+            // 0s do nothing, making them completely transparent over the UI
+        }
+    }
+}
+
+// Draws ONLY one specific line of the games menu (Flicker-Free, Multi-Colored Icons!)
+void st7789_draw_single_game(int index, int is_selected) {
+    int start_y = 65; 
+    int start_x = 35;
+    int y_pos = start_y + (index * 20);
+    
+    // 1. Draw the background and text
+    if (is_selected) {
+        st7789_draw_rect(start_x, y_pos - 2, 170, 16, WIN_TITLE); // Blue Highlight
+        st7789_draw_string(start_x + 24, y_pos, game_items[index], WIN_TEXT_SEL, WIN_TITLE);
+    } else {
+        st7789_draw_rect(start_x, y_pos - 2, 170, 16, WIN_FACE);  // Gray Standard
+        st7789_draw_string(start_x + 24, y_pos, game_items[index], WIN_TEXT, WIN_FACE);
+    }
+
+    // 2. Stack the Colorful Hex Masks based on the game index
+    int ix = start_x + 4; // X coordinate for the icon
+    int iy = y_pos - 2;   // Y coordinate for the icon
+
+    if (index == 0) { 
+        // SNAKE: Green Body, White Eye, Red Tongue
+        st7789_draw_hex_icon(ix, iy, SNAKE_BODY, COLOR_GREEN);
+        st7789_draw_hex_icon(ix, iy, SNAKE_EYE, WIN_TEXT_SEL); 
+        st7789_draw_hex_icon(ix, iy, SNAKE_TONGUE, COLOR_RED);
+    }
+    else if (index == 1) { 
+        // TETRIS: Cyan, Yellow, and Red Blocks
+        st7789_draw_hex_icon(ix, iy, TETRIS_CYAN, COLOR_CYAN);
+        st7789_draw_hex_icon(ix, iy, TETRIS_YELLOW, COLOR_YELLOW);
+        st7789_draw_hex_icon(ix, iy, TETRIS_RED, COLOR_RED);
+    }
+    else if (index == 2) { 
+        // BRICK STUDIO: Yellow/Red Bricks, White Ball, Blue Paddle
+        st7789_draw_hex_icon(ix, iy, BRICK_YELLOW, COLOR_YELLOW);
+        st7789_draw_hex_icon(ix, iy, BRICK_RED, COLOR_RED);
+        st7789_draw_hex_icon(ix, iy, BRICK_WHITE, WIN_TEXT_SEL);
+        st7789_draw_hex_icon(ix, iy, BRICK_BLUE, COLOR_BLUE);
+    }
+}
+
+void st7789_draw_full_games_list(int current_selection) {
+    for (int i = 0; i < TOTAL_GAMES; i++) {
+        st7789_draw_single_game(i, (i == current_selection));
+    }
+}
+
+// The Main Games App Router
+void st7789_run_games_menu() {
+    int game_selection = 0;
+
+    // 1. Draw the pop-up window UI over the desktop
+    st7789_fill_screen(WIN_DESKTOP);
+    draw_win2k_window(20, 30, 200, 200, "Entertainment"); 
+    
+    // 2. Draw the list (FIXED FUNCTION NAME)
+    st7789_draw_full_games_list(game_selection);
+
+    // 3. The non-blocking local input loop
+    while (1) {
+        if ((*UART0_STATUS_REG & 0xFF) > 0) {
+            char in = uart_getchar();
+            int prev_selection = game_selection;
+
+            // Navigation
+            if (in == 'w') {
+                game_selection--;
+                if (game_selection < 0) game_selection = TOTAL_GAMES - 1;
+                st7789_draw_single_game(prev_selection, 0); 
+                st7789_draw_single_game(game_selection, 1); 
+            } 
+            else if (in == 's') {
+                game_selection++;
+                if (game_selection >= TOTAL_GAMES) game_selection = 0;
+                st7789_draw_single_game(prev_selection, 0); 
+                st7789_draw_single_game(game_selection, 1); 
+            } 
+            // Execution
+            else if (in == 'e') {
+                if (game_selection == 0) {
+                    st7789_run_snake();
+                } 
+                else if (game_selection == 1) {
+                    // FIXED: Index 1 is Tetris
+                    st7789_run_tetris();
+                }
+                else if (game_selection == 2) {
+                    st7789_run_block_studio(); 
+                    // FIXED: Index 2 is BrickStudio
+                }
+
+                // If we returned from a game, instantly redraw the Entertainment Window
+                if (game_selection != 3) {
+                    st7789_fill_screen(WIN_DESKTOP);
+                    draw_win2k_window(20, 30, 200, 200, "Entertainment");
+                    st7789_draw_full_games_list(game_selection);
+                }
+            }
+            else if (in == 'q') {
+                // Quick exit back to main OS
+                break;
+            }
+        }
+    }
+}
+
+// 1. PC MONITOR (Taskmgr.exe)
+const unsigned short PC_FRAME[16] = {
+    0x0000, 0x7FFE, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002,
+    0x4002, 0x4002, 0x7FFE, 0x0180, 0x0180, 0x0FF0, 0x0000, 0x0000
+};
+const unsigned short PC_SCREEN[16] = {
+    0x0000, 0x0000, 0x3FFC, 0x3FFC, 0x3FFC, 0x3FFC, 0x3FFC, 0x3FFC,
+    0x3FFC, 0x3FFC, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short PC_GRAPH[16] = {
+    0x0000, 0x0000, 0x0000, 0x0060, 0x0190, 0x0608, 0x1804, 0x2000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+// 2. TEXT DOCUMENT (Notepad.exe)
+const unsigned short FILE_PAPER[16] = {
+    0x0000, 0x1FC0, 0x1FE0, 0x1FF0, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8,
+    0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x0000
+};
+const unsigned short FILE_FOLD[16] = {
+    0x0000, 0x0030, 0x0010, 0x0008, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short FILE_LINES[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0FE0, 0x0000, 0x07E0,
+    0x0000, 0x0FE0, 0x0000, 0x03E0, 0x0000, 0x0FE0, 0x0000, 0x0000
+};
+
+// 3. FOLDER (Explorer.exe)
+const unsigned short FOLDER_BACK[16] = {
+    0x0000, 0x0000, 0x1F00, 0x3FF8, 0x3FF8, 0x3FF8, 0x3FF8, 0x3FF8,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short FOLDER_PAPER[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x1FF0, 0x1FF0, 0x1FF0, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short FOLDER_FRONT[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x7FFE,
+    0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x0000, 0x0000
+};
+
+// 4. ARCADE CABINET (Games)
+const unsigned short ARCADE_BODY[16] = {
+    0x0000, 0x0FF0, 0x1FF8, 0x1FF8, 0x1818, 0x1818, 0x1818, 0x1818,
+    0x1FF8, 0x3FFC, 0x3FFC, 0x1FF8, 0x1FF8, 0x1FF8, 0x0FF0, 0x0000
+};
+const unsigned short ARCADE_SCREEN[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x07E0, 0x07E0, 0x07E0, 0x07E0,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+const unsigned short ARCADE_CONTROLS[16] = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x1248, 0x0000, 0x0000, 0x0A50, 0x0000, 0x0000, 0x0000
+};
+
+// 5. INFO / ABOUT (System Info)
+const unsigned short INFO_BASE[16] = {
+    0x0000, 0x07E0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0x7FFE, 0x7FFE,
+    0x7FFE, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x07E0, 0x0000, 0x0000
+};
+const unsigned short INFO_MARK[16] = {
+    0x0000, 0x0000, 0x0000, 0x0180, 0x0180, 0x0000, 0x0180, 0x0180,
+    0x0180, 0x0180, 0x0180, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+// Draws ONLY one specific line of the Main OS menu with non-overlapping spacing
+void st7789_draw_main_menu_item(int index, int is_selected, const char* label) {
+    int start_y = 45; 
+    int start_x = 25;
+    int y_pos = start_y + (index * 22); // 22px spacing for the 16x16 icons
+    
+    // 1. Draw background block and text
+    if (is_selected) {
+        st7789_draw_rect(start_x, y_pos - 2, 170, 18, WIN_TITLE);
+        st7789_draw_string(start_x + 24, y_pos + 1, label, WIN_TEXT_SEL, WIN_TITLE);
+    } else {
+        st7789_draw_rect(start_x, y_pos - 2, 170, 18, WIN_FACE);
+        st7789_draw_string(start_x + 24, y_pos + 1, label, WIN_TEXT, WIN_FACE);
+    }
+
+    // 2. Stack the Colorful Hex Masks cleanly inside the row bounds
+    int ix = start_x + 4; 
+    int iy = y_pos - 1;   
+
+    if (index == 0) { 
+        // TASKMGR (PC Monitor)
+        st7789_draw_hex_icon(ix, iy, PC_FRAME, COLOR_WHITE);
+        st7789_draw_hex_icon(ix, iy, PC_SCREEN, COLOR_BLUE); 
+        st7789_draw_hex_icon(ix, iy, PC_GRAPH, COLOR_GREEN);
+    }
+    else if (index == 1) { 
+        // EDITOR (Text File)
+        st7789_draw_hex_icon(ix, iy, FILE_PAPER, COLOR_WHITE);
+        st7789_draw_hex_icon(ix, iy, FILE_FOLD, COLOR_GRAY);
+        st7789_draw_hex_icon(ix, iy, FILE_LINES, COLOR_BLUE);
+    }
+    else if (index == 2) { 
+        // GAMES (Arcade)
+        st7789_draw_hex_icon(ix, iy, ARCADE_BODY, COLOR_RED);
+        st7789_draw_hex_icon(ix, iy, ARCADE_SCREEN, COLOR_CYAN);
+        st7789_draw_hex_icon(ix, iy, ARCADE_CONTROLS, COLOR_YELLOW);
+    }
+    else if (index == 3) { 
+        // EXPLORER (Folder)
+        st7789_draw_hex_icon(ix, iy, FOLDER_BACK, COLOR_YELLOW);
+        st7789_draw_hex_icon(ix, iy, FOLDER_PAPER, COLOR_WHITE);
+        // Orange looks best for the front flap, but RED or MAGENTA work if ORANGE isn't defined
+        st7789_draw_hex_icon(ix, iy, FOLDER_FRONT, COLOR_RED); 
+    }
+    else if (index == 4) { 
+        // ABOUT (Info Circle)
+        unsigned short base_color = is_selected ? WIN_TEXT_SEL : WIN_TITLE;
+        unsigned short mark_color = is_selected ? WIN_TITLE : WIN_TEXT_SEL;
+        
+        st7789_draw_hex_icon(ix, iy, INFO_BASE, base_color);
+        st7789_draw_hex_icon(ix, iy, INFO_MARK, mark_color); // Draws the "i" hole inside the circle
+    }
+}
+
+#define TOTAL_MAIN_ITEMS 5
+
+// The loop that draws all 5 icons to the screen
 void st7789_draw_full_menu(int current_selection) {
-    for (int i = 0; i < 5; i++) {
-        st7789_draw_single_item(i, (i == current_selection));
+    // 1. Wipe the inside of the main window clean (prevents ghosting)
+    st7789_draw_rect(20, 40, 200, 250, WIN_FACE);
+    
+    // 2. Loop through all 5 items and draw them using the NEW icon renderer
+    for (int i = 0; i < TOTAL_MAIN_ITEMS; i++) {
+        st7789_draw_main_menu_item(i, (i == current_selection), menu_items[i]);
     }
 }
 
 void kernel_main() {
+    // 1. Hardware Watchdog Disable & Timer Init
     *(volatile unsigned int *)0x3FF480A4 = 0x50D83AA1;
     *(volatile unsigned int *)0x3FF4808C = 0;
     *(volatile unsigned int *)0x3FF5F064 = 0x50D83AA1;
     *(volatile unsigned int *)0x3FF5F048 = 0;
     last_ccount = get_ccount();
+
+    // 2. Subsystem Initialization
     spi_init();
     st7789_init();
-
+    // 3. OS State Tracker Setup
     int current_selection = 0;
     os_state_t current_state = STATE_MENU;
 
+    // 4. Draw Initial OS Desktop
     st7789_draw_desktop();
     st7789_draw_full_menu(current_selection);
-    while(1) {
-        char input = uart_getchar(); 
-        if (current_state == STATE_MENU) {
-            int previous_selection = current_selection;
 
-            if (input == 'w') { 
+    // 5. The Core Kernel Loop
+    while(1) {
+        char input = uart_getchar();
+        if (current_state == STATE_MENU) {            
+            // --- NAVIGATION ---
+            if (input == 'w') {
+                int prev_selection = current_selection;
                 current_selection--;
-                if (current_selection < 0) current_selection = 4; 
+                if (current_selection < 0) current_selection = TOTAL_MAIN_ITEMS - 1;
                 
-                // ONLY update the two items that changed
-                st7789_draw_single_item(previous_selection, 0); // Deselect old
-                st7789_draw_single_item(current_selection, 1);  // Select new
+                // Redraw ONLY the two lines that changed using the new icon function
+                st7789_draw_main_menu_item(prev_selection, 0, menu_items[prev_selection]); 
+                st7789_draw_main_menu_item(current_selection, 1, menu_items[current_selection]); 
             } 
-            else if (input == 's') { 
+            else if (input == 's') {
+                int prev_selection = current_selection;
                 current_selection++;
-                if (current_selection > 4) current_selection = 0; 
+                if (current_selection >= TOTAL_MAIN_ITEMS) current_selection = 0;
                 
-                // ONLY update the two items that changed
-                st7789_draw_single_item(previous_selection, 0); // Deselect old
-                st7789_draw_single_item(current_selection, 1);  // Select new
-            } else if (input == 'e') { 
+                // Redraw ONLY the two lines that changed using the new icon function
+                st7789_draw_main_menu_item(prev_selection, 0, menu_items[prev_selection]); 
+                st7789_draw_main_menu_item(current_selection, 1, menu_items[current_selection]); 
+            } 
+            
+            // --- APP EXECUTION ROUTER ---
+            else if (input == 'e') { 
+                
+                // 1. Update state and branch to the specific app
                 if (current_selection == 0) {
                     current_state = STATE_APP_MONITOR;
                     st7789_run_sys_monitor();
-                    current_state = STATE_MENU;
-                    st7789_draw_desktop();
-                    st7789_draw_full_menu(current_selection);
                 } 
                 else if (current_selection == 1) {
                     current_state = STATE_APP_EDITOR;
                     run_dynamic_text_editor();
-                    current_state = STATE_MENU;
-                    st7789_draw_desktop();
-                    st7789_draw_full_menu(current_selection);
                 } 
                 else if (current_selection == 2) {
                     current_state = STATE_APP_GAMES;
                     st7789_run_games_menu();
-                    current_state = STATE_MENU;
-                    st7789_draw_desktop();
-                    st7789_draw_full_menu(current_selection);
                 } 
                 else if (current_selection == 3) {
-                    current_state = STATE_APP_EXPLORER; // 1. Set state
-                    run_ram_file_browser();             // 2. Run app
-                    current_state = STATE_MENU;         // 3. Restore state
-                    st7789_draw_desktop();              // 4. Redraw Background
-                    st7789_draw_full_menu(current_selection); // 5. Redraw Menu List
+                    current_state = STATE_APP_EXPLORER; 
+                    run_ram_file_browser();             
                 } 
                 else if (current_selection == 4) {
                     current_state = STATE_APP_ABOUT;
                     st7789_run_app_placeholder("ABOUT", "Bare-Metal OS");
-                    current_state = STATE_MENU;
-                    st7789_draw_desktop();
-                    st7789_draw_full_menu(current_selection);
                 }
+                
+                // 2. The app has finished and returned control to the kernel.
+                // Instantly restore the kernel state and redraw the desktop!
+                current_state = STATE_MENU;         
+                st7789_draw_desktop();              
+                st7789_draw_full_menu(current_selection); 
             }
         } 
-        else {
-            if (input == 'q') { 
-                current_state = STATE_MENU;
-                st7789_draw_desktop();
-                st7789_draw_full_menu(current_selection);
-            }
-        }
     }
 }
